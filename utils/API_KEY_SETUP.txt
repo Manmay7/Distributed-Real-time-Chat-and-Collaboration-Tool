@@ -1,0 +1,11 @@
+# 1. Install
+pip install google-generativeai
+
+# 2. Get API key
+# Visit: https://makersuite.google.com/app/apikey
+
+# 3. Set it
+export GEMINI_API_KEY='your-key-here'
+
+# 4. Run
+python llm_server.py  # Uses Gemini automatically

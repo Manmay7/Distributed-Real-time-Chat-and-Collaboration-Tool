@@ -1,0 +1,308 @@
+syntax = "proto3";
+
+package chat;
+
+import "google/protobuf/timestamp.proto";
+
+service ChatService {
+    // Authentication
+    rpc Login(LoginRequest) returns (LoginResponse);
+    rpc Signup(SignupRequest) returns (SignupResponse);
+    rpc Logout(LogoutRequest) returns (StatusResponse);
+    
+    // Real-time messaging - streaming
+    rpc StreamMessages(StreamRequest) returns (stream MessageEvent);
+    
+    // Messaging
+    rpc PostMessage(PostRequest) returns (StatusResponse);
+    rpc GetMessages(GetRequest) returns (GetResponse);
+    
+    // Direct Messages
+    rpc SendDirectMessage(DirectMessageRequest) returns (StatusResponse);
+    rpc GetDirectMessages(GetDirectMessagesRequest) returns (DirectMessageResponse);
+    rpc ListConversations(ListConversationsRequest) returns (ConversationsResponse);
+    
+    // Channel Management
+    rpc CreateChannel(CreateChannelRequest) returns (StatusResponse);
+    rpc JoinChannel(JoinChannelRequest) returns (StatusResponse);
+    rpc LeaveChannel(LeaveChannelRequest) returns (StatusResponse);
+    rpc GetChannels(GetChannelsRequest) returns (ChannelListResponse);
+    
+    // User Management
+    rpc GetOnlineUsers(GetOnlineUsersRequest) returns (UserListResponse);
+    rpc UpdatePresence(UpdatePresenceRequest) returns (StatusResponse);
+    
+    // File Sharing
+    rpc UploadFile(FileUploadRequest) returns (FileUploadResponse);
+    rpc DownloadFile(FileDownloadRequest) returns (FileResponse);
+    rpc ListFiles(ListFilesRequest) returns (FileListResponse);
+    
+    // Admin Functions
+    rpc ManageUser(ManageUserRequest) returns (StatusResponse);
+    rpc ManageChannel(ManageChannelRequest) returns (StatusResponse);
+}
+
+// Common Messages
+message StatusResponse {
+    bool success = 1;
+    string message = 2;
+    int32 code = 3;
+}
+
+// Authentication Messages
+message LoginRequest {
+    string username = 1;
+    string password = 2;
+}
+
+message LoginResponse {
+    bool success = 1;
+    string token = 2;
+    string message = 3;
+    UserInfo user_info = 4;
+}
+
+message SignupRequest {
+    string username = 1;
+    string password = 2;
+    string email = 3;
+    string display_name = 4;
+}
+
+message SignupResponse {
+    bool success = 1;
+    string message = 2;
+    int32 code = 3;
+    UserInfo user_info = 4;
+}
+
+message LogoutRequest {
+    string token = 1;
+}
+
+// Real-time Streaming Messages
+message StreamRequest {
+    string token = 1;
+    repeated string channel_ids = 2;  // Channels to subscribe to
+    bool include_direct_messages = 3;  // Include DMs in stream
+}
+
+message MessageEvent {
+    string event_type = 1;  // "message", "dm", "user_joined", "user_left", "file_uploaded"
+    Message message = 2;
+    DirectMessage direct_message = 3;
+    UserInfo user = 4;
+    FileMetadata file = 5;
+    string channel_id = 6;
+}
+
+// User Messages
+message UserInfo {
+    string user_id = 1;
+    string username = 2;
+    bool is_admin = 3;
+    string status = 4;
+    google.protobuf.Timestamp last_seen = 5;
+    string display_name = 6;
+    string email = 7;
+}
+
+message GetOnlineUsersRequest {
+    string token = 1;
+    string channel_id = 2;
+}
+
+message UserListResponse {
+    bool success = 1;
+    repeated UserInfo users = 2;
+}
+
+message UpdatePresenceRequest {
+    string token = 1;
+    string status = 2;
+}
+
+// Message Messages
+message PostRequest {
+    string token = 1;
+    string type = 2;
+    string channel_id = 3;
+    string content = 4;
+    bytes file_data = 5;
+    string file_name = 6;
+}
+
+message GetRequest {
+    string token = 1;
+    string type = 2;
+    string channel_id = 3;
+    int32 limit = 4;
+    int32 offset = 5;
+}
+
+message Message {
+    string message_id = 1;
+    string sender_id = 2;
+    string sender_name = 3;
+    string channel_id = 4;
+    string content = 5;
+    google.protobuf.Timestamp timestamp = 6;
+    string type = 7;
+    string file_url = 8;
+}
+
+message GetResponse {
+    bool success = 1;
+    repeated Message messages = 2;
+    string next_cursor = 3;
+}
+
+// Direct Message Messages
+message DirectMessageRequest {
+    string token = 1;
+    string recipient_username = 2;
+    string content = 3;
+    bytes file_data = 4;
+    string file_name = 5;
+}
+
+message DirectMessage {
+    string message_id = 1;
+    string sender_id = 2;
+    string sender_name = 3;
+    string recipient_id = 4;
+    string recipient_name = 5;
+    string content = 6;
+    google.protobuf.Timestamp timestamp = 7;
+    bool is_read = 8;
+    string file_url = 9;
+}
+
+message GetDirectMessagesRequest {
+    string token = 1;
+    string other_username = 2;
+    int32 limit = 3;
+    int32 offset = 4;
+}
+
+message DirectMessageResponse {
+    bool success = 1;
+    repeated DirectMessage messages = 2;
+}
+
+message ListConversationsRequest {
+    string token = 1;
+}
+
+message Conversation {
+    string username = 1;
+    string display_name = 2;
+    int32 unread_count = 3;
+    DirectMessage last_message = 4;
+}
+
+message ConversationsResponse {
+    bool success = 1;
+    repeated Conversation conversations = 2;
+}
+
+// Channel Messages
+message CreateChannelRequest {
+    string token = 1;
+    string channel_name = 2;
+    string description = 3;
+    bool is_private = 4;
+}
+
+message JoinChannelRequest {
+    string token = 1;
+    string channel_id = 2;
+}
+
+message LeaveChannelRequest {
+    string token = 1;
+    string channel_id = 2;
+}
+
+message GetChannelsRequest {
+    string token = 1;
+}
+
+message Channel {
+    string channel_id = 1;
+    string name = 2;
+    string description = 3;
+    bool is_private = 4;
+    int32 member_count = 5;
+    google.protobuf.Timestamp created_at = 6;
+}
+
+message ChannelListResponse {
+    bool success = 1;
+    repeated Channel channels = 2;
+}
+
+// File Messages
+message FileUploadRequest {
+    string token = 1;
+    string channel_id = 2;
+    string recipient_username = 3;  // For DM file sharing
+    string file_name = 4;
+    bytes file_data = 5;
+    string mime_type = 6;
+    string description = 7;
+}
+
+message FileUploadResponse {
+    bool success = 1;
+    string message = 2;
+    string file_id = 3;
+    string file_url = 4;
+}
+
+message FileDownloadRequest {
+    string token = 1;
+    string file_id = 2;
+}
+
+message FileResponse {
+    bool success = 1;
+    string file_name = 2;
+    bytes file_data = 3;
+    string mime_type = 4;
+}
+
+message FileMetadata {
+    string file_id = 1;
+    string file_name = 2;
+    string uploader_name = 3;
+    int64 file_size = 4;
+    string mime_type = 5;
+    google.protobuf.Timestamp uploaded_at = 6;
+    string channel_id = 7;
+}
+
+message ListFilesRequest {
+    string token = 1;
+    string channel_id = 2;
+}
+
+message FileListResponse {
+    bool success = 1;
+    repeated FileMetadata files = 2;
+}
+
+// Admin Messages
+message ManageUserRequest {
+    string token = 1;
+    string target_user_id = 2;
+    string action = 3;
+    string reason = 4;
+}
+
+message ManageChannelRequest {
+    string token = 1;
+    string channel_id = 2;
+    string action = 3;
+    map<string, string> parameters = 4;
+}

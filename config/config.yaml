@@ -1,0 +1,25 @@
+server:
+  host: "localhost"
+  app_server_ports: [50051, 50052, 50053]
+  llm_server_port: 50055
+  
+auth:
+  jwt_secret: "your-secret-key-here"
+  token_expiry_hours: 24
+  
+chat:
+  max_message_length: 1000
+  max_file_size_mb: 10
+  channels:
+    - general
+    - random
+    - development
+  
+llm:
+  model_name: "microsoft/DialoGPT-small"
+  max_response_length: 200
+  temperature: 0.7
+  
+logging:
+  level: INFO
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"

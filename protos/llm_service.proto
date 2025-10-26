@@ -1,0 +1,64 @@
+syntax = "proto3";
+
+package llm;
+
+service LLMService {
+    rpc GetLLMAnswer(LLMRequest) returns (LLMResponse);
+    rpc GetSmartReply(SmartReplyRequest) returns (SmartReplyResponse);
+    rpc SummarizeConversation(SummarizeRequest) returns (SummarizeResponse);
+    rpc GetContextSuggestions(ContextRequest) returns (SuggestionsResponse);
+}
+
+message LLMRequest {
+    string request_id = 1;
+    string query = 2;
+    repeated string context = 3;
+    map<string, string> parameters = 4;
+}
+
+message LLMResponse {
+    string request_id = 1;
+    string answer = 2;
+    float confidence = 3;
+}
+
+message SmartReplyRequest {
+    string request_id = 1;
+    repeated ChatMessage recent_messages = 2;
+    string user_id = 3;
+}
+
+message ChatMessage {
+    string sender = 1;
+    string content = 2;
+    int64 timestamp = 3;
+}
+
+message SmartReplyResponse {
+    string request_id = 1;
+    repeated string suggestions = 2;
+}
+
+message SummarizeRequest {
+    string request_id = 1;
+    repeated ChatMessage messages = 2;
+    int32 max_length = 3;
+}
+
+message SummarizeResponse {
+    string request_id = 1;
+    string summary = 2;
+    repeated string key_points = 3;
+}
+
+message ContextRequest {
+    string request_id = 1;
+    repeated ChatMessage context = 2;
+    string current_input = 3;
+}
+
+message SuggestionsResponse {
+    string request_id = 1;
+    repeated string suggestions = 2;
+    repeated string topics = 3;
+}	
