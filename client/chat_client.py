@@ -58,10 +58,10 @@ class ChatClient(cmd.Cmd):
         try:
             self.channel = grpc.insecure_channel(self.server_address)
             self.stub = chat_service_pb2_grpc.ChatServiceStub(self.channel)
-            print(f"✓ Connected to chat server at {self.server_address}")
-            print(f"✓ Downloads folder: {self.downloads_dir}/")
+            print(f"Connected to chat server at {self.server_address}")
+            print(f"Downloads folder: {self.downloads_dir}/")
         except Exception as e:
-            print(f"✗ Failed to connect to chat server: {e}")
+            print(f"Failed to connect to chat server: {e}")
             sys.exit(1)
     
     def _connect_llm(self):
@@ -69,9 +69,9 @@ class ChatClient(cmd.Cmd):
         try:
             self.llm_channel = grpc.insecure_channel(self.llm_address)
             self.llm_stub = llm_service_pb2_grpc.LLMServiceStub(self.llm_channel)
-            print(f"✓ Connected to LLM server at {self.llm_address}")
+            print(f"Connected to LLM server at {self.llm_address}")
         except Exception as e:
-            print(f"⚠ Warning: LLM server unavailable")
+            print(f"Warning: LLM server unavailable")
     
     def _start_message_stream(self):
         """Start streaming messages in background"""
@@ -100,7 +100,7 @@ class ChatClient(cmd.Cmd):
                 
         except Exception as e:
             if self.running:
-                print(f"\n⚠ Stream disconnected: {e}")
+                print(f"\nStream disconnected: {e}")
     
     def _handle_channel_message(self, event):
         """Handle incoming channel message"""
@@ -121,7 +121,7 @@ class ChatClient(cmd.Cmd):
             print(self.prompt, end='', flush=True)
         else:
             self.unread_dms[sender] = self.unread_dms.get(sender, 0) + 1
-            print(f"\n💬 New DM from {sender}: {dm.content[:50]}...")
+            print(f"\nNew DM from {sender}: {dm.content[:50]}...")
             print(f"   Type 'dm {sender}' to reply")
             print(self.prompt, end='', flush=True)
     
@@ -139,18 +139,18 @@ class ChatClient(cmd.Cmd):
             print("Already logged in. Logout first.")
             return
         
-        print("\n📝 Create New Account")
+        print("\nCreate New Account")
         print("-" * 30)
         
         try:
             username = input("Username (3-20 chars): ").strip()
             if not username:
-                print("✗ Username required")
+                print("Username required")
                 return
             
             email = input("Email: ").strip()
             if not email:
-                print("✗ Email required")
+                print("Email required")
                 return
             
             display_name = input("Display name (optional): ").strip() or username
@@ -158,10 +158,10 @@ class ChatClient(cmd.Cmd):
             confirm_password = getpass.getpass("Confirm password: ")
             
             if password != confirm_password:
-                print("✗ Passwords don't match")
+                print("Passwords don't match")
                 return
             
-            print("\n🔄 Creating account...")
+            print("\nCreating account...")
             request = chat_service_pb2.SignupRequest(
                 username=username, password=password,
                 email=email, display_name=display_name
@@ -170,17 +170,17 @@ class ChatClient(cmd.Cmd):
             response = self.stub.Signup(request)
             
             if response.success:
-                print(f"✓ {response.message}")
+                print(f"  {response.message}")
                 print(f"  Username: {response.user_info.username}")
                 print(f"  Display Name: {response.user_info.display_name}")
                 print("\nYou can now login!")
             else:
-                print(f"✗ Signup failed: {response.message}")
+                print(f"Signup failed: {response.message}")
                 
         except KeyboardInterrupt:
-            print("\n✗ Signup cancelled")
+            print("\nSignup cancelled")
         except Exception as e:
-            print(f"✗ Error: {e}")
+            print(f"Error: {e}")
     
     def do_login(self, arg):
         """Login: login <username>"""
@@ -202,16 +202,16 @@ class ChatClient(cmd.Cmd):
             if response.success:
                 self.token = response.token
                 self.username = username
-                print(f"✓ Logged in as {username}")
+                print(f"Logged in as {username}")
                 print(f"  Display: {response.user_info.display_name}")
                 
                 self._join_default_channel()
                 self._start_message_stream()
                 self._check_conversations()
             else:
-                print(f"✗ Login failed: {response.message}")
+                print(f"Login failed: {response.message}")
         except Exception as e:
-            print(f"✗ Error: {e}")
+            print(f"Error: {e}")
     
     def do_logout(self, arg):
         """Logout"""
@@ -225,13 +225,13 @@ class ChatClient(cmd.Cmd):
             response = self.stub.Logout(request)
             
             if response.success:
-                print("✓ Logged out")
+                print("Logged out")
                 self.token = None
                 self.username = None
                 self.current_channel = None
                 self.dm_mode = False
         except Exception as e:
-            print(f"✗ Error: {e}")
+            print(f"Error: {e}")
     
     def do_channels(self, arg):
         """List all channels"""
@@ -244,7 +244,7 @@ class ChatClient(cmd.Cmd):
             response = self.stub.GetChannels(request)
             
             if response.success:
-                print("\n📁 Available Channels:")
+                print("\nAvailable Channels:")
                 print("-" * 50)
                 for channel in response.channels:
                     status = "✓" if channel.channel_id == self.current_channel else " "
@@ -253,7 +253,7 @@ class ChatClient(cmd.Cmd):
                         print(f"    {channel.description}")
                 print("-" * 50)
         except Exception as e:
-            print(f"✗ Error: {e}")
+            print(f"Error: {e}")
     
     def do_create_channel(self, arg):
         """Create a new channel: create_channel <name> [description]"""
@@ -279,12 +279,12 @@ class ChatClient(cmd.Cmd):
             response = self.stub.CreateChannel(request)
             
             if response.success:
-                print(f"✓ {response.message}")
+                print(f"{response.message}")
                 print(f"  You are the admin of #{channel_name}")
             else:
-                print(f"✗ Failed: {response.message}")
+                print(f"Failed: {response.message}")
         except Exception as e:
-            print(f"✗ Error: {e}")
+            print(f"Error: {e}")
     
     def do_add_user(self, arg):
         """Add user to current channel (admin only): add_user <username>"""
@@ -308,11 +308,11 @@ class ChatClient(cmd.Cmd):
             response = self.stub.ManageChannel(request)
             
             if response.success:
-                print(f"✓ {response.message}")
+                print(f"{response.message}")
             else:
-                print(f"✗ Failed: {response.message}")
+                print(f"Failed: {response.message}")
         except Exception as e:
-            print(f"✗ Error: {e}")
+            print(f"Error: {e}")
     
     def do_remove_user(self, arg):
         """Remove user from current channel (admin only): remove_user <username>"""
@@ -336,11 +336,11 @@ class ChatClient(cmd.Cmd):
             response = self.stub.ManageChannel(request)
             
             if response.success:
-                print(f"✓ {response.message}")
+                print(f"{response.message}")
             else:
-                print(f"✗ Failed: {response.message}")
+                print(f"Failed: {response.message}")
         except Exception as e:
-            print(f"✗ Error: {e}")
+            print(f"Error: {e}")
     
     def do_join(self, arg):
         """Join channel: join <channel_name>"""
@@ -373,15 +373,15 @@ class ChatClient(cmd.Cmd):
                             self.current_channel = channel.channel_id
                             self.current_channel_name = channel.name
                             self.dm_mode = False
-                            print(f"✓ Joined #{channel_name}")
+                            print(f"Joined #{channel_name}")
                             self._show_recent_messages()
                         else:
-                            print(f"✗ Failed to join: {join_resp.message}")
+                            print(f"Failed to join: {join_resp.message}")
                         return
                 
-                print(f"✗ Channel '{channel_name}' not found")
+                print(f"Channel '{channel_name}' not found")
         except Exception as e:
-            print(f"✗ Error: {e}")
+            print(f"Error: {e}")
     
     def do_send(self, arg):
         """Send message: send <message>"""
@@ -406,7 +406,7 @@ class ChatClient(cmd.Cmd):
                     timestamp = datetime.now().strftime("%H:%M")
                     print(f"[{timestamp}] You: {arg}")
                 else:
-                    print(f"✗ Failed: {response.message}")
+                    print(f"Failed: {response.message}")
             else:
                 if not self.current_channel:
                     print("Join a channel first or use 'dm <username>'")
@@ -424,9 +424,9 @@ class ChatClient(cmd.Cmd):
                     timestamp = datetime.now().strftime("%H:%M")
                     print(f"[{timestamp}] You: {arg}")
                 else:
-                    print(f"✗ Failed: {response.message}")
+                    print(f"Failed: {response.message}")
         except Exception as e:
-            print(f"✗ Error: {e}")
+            print(f"Error: {e}")
     
     def do_dm(self, arg):
         """Start DM conversation: dm <username>"""
@@ -441,7 +441,7 @@ class ChatClient(cmd.Cmd):
         recipient = arg.strip()
         
         if recipient == self.username:
-            print("✗ Cannot DM yourself")
+            print("Cannot DM yourself")
             return
         
         self.dm_mode = True
@@ -451,7 +451,7 @@ class ChatClient(cmd.Cmd):
         if recipient in self.unread_dms:
             del self.unread_dms[recipient]
         
-        print(f"💬 Direct message with @{recipient}")
+        print(f" Direct message with @{recipient}")
         print(f"   Type 'send <message>' to chat")
         print(f"   Type 'back' to return to channels")
         
@@ -465,7 +465,7 @@ class ChatClient(cmd.Cmd):
             response = self.stub.GetDirectMessages(request)
             
             if response.success and response.messages:
-                print("\n📝 Recent messages:")
+                print("\n Recent messages:")
                 print("-" * 50)
                 for dm in response.messages:
                     timestamp = datetime.now().strftime("%H:%M")
@@ -473,7 +473,7 @@ class ChatClient(cmd.Cmd):
                     print(f"[{timestamp}] {sender}: {dm.content}")
                 print("-" * 50)
         except Exception as e:
-            print(f"⚠ Could not load history: {e}")
+            print(f"Could not load history: {e}")
     
     def do_conversations(self, arg):
         """List all DM conversations"""
@@ -487,7 +487,7 @@ class ChatClient(cmd.Cmd):
             
             if response.success:
                 if response.conversations:
-                    print("\n💬 Your Conversations:")
+                    print("\nYour Conversations:")
                     print("-" * 50)
                     for conv in response.conversations:
                         unread = f"({conv.unread_count} unread)" if conv.unread_count > 0 else ""
@@ -498,7 +498,7 @@ class ChatClient(cmd.Cmd):
                 else:
                     print("No conversations yet")
         except Exception as e:
-            print(f"✗ Error: {e}")
+            print(f"Error: {e}")
     
     def do_back(self, arg):
         """Return to channel mode from DM"""
@@ -507,9 +507,9 @@ class ChatClient(cmd.Cmd):
             self.dm_partner = None
             if self.current_channel_name:
                 self.current_channel = None  # Will need to rejoin
-                print(f"✓ Exited DM mode. Use 'join {self.current_channel_name}' to return to channel")
+                print(f"Exited DM mode. Use 'join {self.current_channel_name}' to return to channel")
             else:
-                print("✓ Back to channel mode")
+                print("Back to channel mode")
         else:
             print("Already in channel mode")
     
@@ -526,7 +526,7 @@ class ChatClient(cmd.Cmd):
         filepath = arg.strip()
         
         if not os.path.exists(filepath):
-            print(f"✗ File not found: {filepath}")
+            print(f"File not found: {filepath}")
             return
         
         try:
@@ -537,10 +537,10 @@ class ChatClient(cmd.Cmd):
             file_size = len(file_data)
             
             if file_size > 10 * 1024 * 1024:
-                print(f"✗ File too large. Max 10MB")
+                print(f"File too large. Max 10MB")
                 return
             
-            print(f"📤 Uploading {file_name} ({file_size} bytes)...")
+            print(f"Uploading {file_name} ({file_size} bytes)...")
             
             if self.dm_mode:
                 request = chat_service_pb2.FileUploadRequest(
@@ -564,13 +564,13 @@ class ChatClient(cmd.Cmd):
             response = self.stub.UploadFile(request)
             
             if response.success:
-                print(f"✓ File uploaded: {file_name}")
-                print(f"  File ID: {response.file_id}")
+                print(f"File uploaded: {file_name}")
+                print(f"File ID: {response.file_id}")
             else:
-                print(f"✗ Upload failed: {response.message}")
+                print(f"Upload failed: {response.message}")
                 
         except Exception as e:
-            print(f"✗ Error: {e}")
+            print(f"Error: {e}")
     
     def do_download_file(self, arg):
         """Download file: download_file <file_id> [save_as]"""
@@ -587,7 +587,7 @@ class ChatClient(cmd.Cmd):
         save_as = parts[1] if len(parts) > 1 else None
         
         try:
-            print(f"📥 Downloading file...")
+            print(f"Downloading file...")
             
             request = chat_service_pb2.FileDownloadRequest(
                 token=self.token,
@@ -629,7 +629,7 @@ class ChatClient(cmd.Cmd):
             
             if response.success:
                 if response.files:
-                    print(f"\n📎 Files in #{self.current_channel_name}:")
+                    print(f"\nFiles in #{self.current_channel_name}:")
                     print("-" * 70)
                     for file in response.files:
                         size_kb = file.file_size / 1024
@@ -671,18 +671,18 @@ class ChatClient(cmd.Cmd):
                 online_users = [u for u in response.users if u.status == "online"]
                 offline_users = [u for u in response.users if u.status == "offline"]
                 
-                print("\n👥 All Users:")
+                print("\n All Users:")
                 print("-" * 50)
                 
                 if online_users:
-                    print("🟢 ONLINE:")
+                    print("ONLINE:")
                     for user in online_users:
                         admin_badge = "👑" if user.is_admin else "  "
                         display = user.display_name if user.display_name != user.username else user.username
                         print(f"  {admin_badge} {display} (@{user.username})")
                 
                 if offline_users:
-                    print("\n🔴 OFFLINE:")
+                    print("\n OFFLINE:")
                     for user in offline_users:
                         admin_badge = "👑" if user.is_admin else "  "
                         display = user.display_name if user.display_name != user.username else user.username
@@ -701,14 +701,14 @@ class ChatClient(cmd.Cmd):
     def do_help_all(self, arg):
         """Show all available commands"""
         print("\n" + "="*60)
-        print("🔐 AUTHENTICATION COMMANDS")
+        print("AUTHENTICATION COMMANDS")
         print("="*60)
         print("  signup                    - Create new account")
         print("  login <username>          - Login to account")
         print("  logout                    - Logout")
         
         print("\n" + "="*60)
-        print("💬 CHANNEL COMMANDS")
+        print("CHANNEL COMMANDS")
         print("="*60)
         print("  channels                  - List all channels")
         print("  create_channel <name> [d] - Create new channel (you become admin)")
@@ -717,13 +717,13 @@ class ChatClient(cmd.Cmd):
         print("  history [limit]           - Show message history")
         
         print("\n" + "="*60)
-        print("👑 CHANNEL ADMIN COMMANDS")
+        print("CHANNEL ADMIN COMMANDS")
         print("="*60)
         print("  add_user <username>       - Add user to current channel")
         print("  remove_user <username>    - Remove user from current channel")
         
         print("\n" + "="*60)
-        print("📨 DIRECT MESSAGE COMMANDS")
+        print("DIRECT MESSAGE COMMANDS")
         print("="*60)
         print("  dm <username>             - Start DM conversation")
         print("  conversations             - List all your DM conversations")
@@ -731,19 +731,19 @@ class ChatClient(cmd.Cmd):
         print("  back                      - Return to channel mode")
         
         print("\n" + "="*60)
-        print("📎 FILE TRANSFER COMMANDS")
+        print("FILE TRANSFER COMMANDS")
         print("="*60)
         print("  upload <filepath>         - Upload file to channel/DM")
         print("  download_file <id> [name] - Download file by ID")
         print("  files                     - List files in current channel")
         
         print("\n" + "="*60)
-        print("👥 USER COMMANDS")
+        print("USER COMMANDS")
         print("="*60)
         print("  users                     - Show all users (online/offline)")
         
         print("\n" + "="*60)
-        print("🤖 AI/LLM COMMANDS")
+        print("AI/LLM COMMANDS")
         print("="*60)
         print("  ask_llm <question>        - Ask AI a question")
         print("  smart_reply               - Get AI reply suggestions")
@@ -752,11 +752,11 @@ class ChatClient(cmd.Cmd):
         print("  context_help [text]       - Get context suggestions")
         
         print("\n" + "="*60)
-        print("⚙️  OTHER COMMANDS")
+        print("OTHER COMMANDS")
         print("="*60)
         print("  clear                     - Clear screen")
         print("  help                      - Show help")
-        print("  exit/quit                 - Exit application")
+        print("  exit                      - Exit application")
         print("="*60 + "\n")
     
     def do_ask_llm(self, arg):
@@ -973,9 +973,9 @@ class ChatClient(cmd.Cmd):
         print("Goodbye! 👋")
         return True
     
-    def do_quit(self, arg):
-        """Exit the application"""
-        return self.do_exit(arg)
+    # def do_quit(self, arg):
+    #     """Exit the application"""
+    #     return self.do_exit(arg)
     
     def _join_default_channel(self):
         """Auto-join general channel"""
