@@ -43,9 +43,8 @@ class ChatClient(cmd.Cmd):
         self.dm_partner = None
         self.unread_dms = {}
         
-        # Create downloads folder for this client
-        self.downloads_dir = f"downloads_{uuid.uuid4().hex[:8]}"
-        os.makedirs(self.downloads_dir, exist_ok=True)
+        # Downloads folder will be set after login
+        self.downloads_dir = None
         
         # LLM connection
         self.llm_channel = None

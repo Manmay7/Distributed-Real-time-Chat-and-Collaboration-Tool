@@ -35,11 +35,11 @@ class LLMServicer(llm_service_pb2_grpc.LLMServiceServicer):
             import google.generativeai as genai
             
             genai.configure(api_key=self.gemini_api_key)
-            self.model = genai.GenerativeModel('gemini-2.5-flash')
+            self.model = genai.GenerativeModel('gemini-2.0-flash-exp')
             self.backend = "gemini"
             
-            logger.info("✓ Using Gemini Flash API (much smarter responses!)")
-            logger.info("  Model: gemini-2.5-flash")
+            logger.info("✓ Using Gemini 2.0 Flash (Experimental) - Latest & Smartest!")
+            logger.info("  Model: gemini-2.0-flash-exp")
             logger.info("  Free tier: 15 requests/minute")
             
         except ImportError:
@@ -285,6 +285,7 @@ Provide:
 2. 2 related topics
 
 Format as:
+SUGGESTIONS:
 - suggestion 1
 - suggestion 2
 - suggestion 3
