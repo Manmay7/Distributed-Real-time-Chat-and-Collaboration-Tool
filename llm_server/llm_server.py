@@ -28,12 +28,11 @@ class LLMServicer(llm_service_pb2_grpc.LLMServiceServicer):
         """Initialize Gemini 2.0 Flash API"""
         try:
             genai.configure(api_key=self.gemini_api_key)
-            self.model = genai.GenerativeModel('gemini-2.0-flash-exp')
+            self.model = genai.GenerativeModel('gemini-2.5-flash')
+            self.backend = "gemini"
             
-            logger.info("=" * 60)
-            logger.info("✓ Gemini 2.0 Flash (Experimental) Initialized!")
-            logger.info("  Model: gemini-2.0-flash-exp")
-            logger.info("  Latest & Smartest Google AI Model")
+            logger.info("  Using Gemini Flash API (much smarter responses!)")
+            logger.info("  Model: gemini-2.5-flash")
             logger.info("  Free tier: 15 requests/minute")
             logger.info("=" * 60)
             
