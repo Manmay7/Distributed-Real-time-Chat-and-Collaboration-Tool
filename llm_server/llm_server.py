@@ -20,12 +20,12 @@ logger = logging.getLogger(__name__)
 
 class LLMServicer(llm_service_pb2_grpc.LLMServiceServicer):
     def __init__(self, gemini_api_key: str):
-        """Initialize LLM Service with Gemini 2.0 Flash"""
+        """Initialize LLM Service with Gemini 2.5 Flash"""
         self.gemini_api_key = gemini_api_key
         self._init_gemini()
     
     def _init_gemini(self):
-        """Initialize Gemini 2.0 Flash API"""
+        """Initialize Gemini 2.5 Flash API"""
         try:
             genai.configure(api_key=self.gemini_api_key)
             self.model = genai.GenerativeModel('gemini-2.5-flash')
@@ -40,30 +40,7 @@ class LLMServicer(llm_service_pb2_grpc.LLMServiceServicer):
             logger.error(f"Failed to initialize Gemini: {e}")
             raise
     
-    def GetLLMAnswer(self, request, context):
-        """Generate answer based on query and context"""
-        request_id = request.request_id
-        query = request.query
-        context_list = list(request.context) if request.context else []
-        
-        logger.info(f"Processing LLM request: {query[:60]}...")
-        
-        try:
-            response_text = self._generate_response(query, context_list)
-            
-            return llm_service_pb2.LLMResponse(
-                request_id=request_id,
-                answer=response_text,
-                confidence=0.95
-            )
-            
-        except Exception as e:
-            logger.error(f"Error processing LLM request: {e}")
-            return llm_service_pb2.LLMResponse(
-                request_id=request_id,
-                answer="I apologize, but I'm having trouble processing your request. Please try again.",
-                confidence=0.0
-            )
+    
     
     def GetSmartReply(self, request, context):
         """Generate smart reply suggestions"""
@@ -112,53 +89,9 @@ class LLMServicer(llm_service_pb2_grpc.LLMServiceServicer):
                 key_points=[]
             )
     
-    def GetContextSuggestions(self, request, context):
-        """Get context-aware suggestions"""
-        request_id = request.request_id
-        context_messages = list(request.context)
-        current_input = request.current_input
-        
-        logger.info(f"Getting context suggestions...")
-        
-        try:
-            suggestions, topics = self._get_context_suggestions(context_messages, current_input)
-            
-            return llm_service_pb2.SuggestionsResponse(
-                request_id=request_id,
-                suggestions=suggestions,
-                topics=topics
-            )
-            
-        except Exception as e:
-            logger.error(f"Error getting suggestions: {e}")
-            return llm_service_pb2.SuggestionsResponse(
-                request_id=request_id,
-                suggestions=["sounds interesting", "tell me more", "I see"],
-                topics=[]
-            )
     
-    def _generate_response(self, query: str, context_list: List[str]) -> str:
-        """Generate response using Gemini 2.0 Flash"""
-        try:
-            if context_list:
-                # Include recent context for better responses
-                context_str = "\n".join(context_list[-5:])
-                prompt = f"""Based on this recent conversation context:
-
-{context_str}
-
-User's question: {query}
-
-Provide a helpful, informative response that considers the conversation context:"""
-            else:
-                prompt = query
-            
-            response = self.model.generate_content(prompt)
-            return response.text.strip()
-            
-        except Exception as e:
-            logger.error(f"Gemini API error: {e}")
-            return "I'm having trouble connecting to the AI service. Please check your API key and internet connection."
+    
+   
     
     def _generate_smart_replies(self, messages: List) -> List[str]:
         """Generate smart reply suggestions using Gemini"""
@@ -263,67 +196,7 @@ Key Points:
                 [f"{len(messages)} messages", f"Participants: {len(participants)}"]
             )
     
-    def _get_context_suggestions(self, messages: List, current_input: str) -> tuple:
-        """Get context-aware suggestions using Gemini"""
-        try:
-            context = "\n".join([f"{m.sender}: {m.content}" for m in messages[-5:]]) if messages else "No previous context"
-            
-            prompt = f"""Based on this conversation context:
-{context}
-
-Current partial input: "{current_input}"
-
-Provide:
-1. Three completion suggestions for what the user might want to say
-2. Two related topics they might want to discuss
-
-Format:
-COMPLETIONS:
-- suggestion 1
-- suggestion 2
-- suggestion 3
-
-TOPICS:
-- topic 1
-- topic 2"""
-            
-            response = self.model.generate_content(prompt)
-            text = response.text.strip()
-            
-            suggestions = []
-            topics = []
-            
-            current_section = None
-            for line in text.split('\n'):
-                line = line.strip()
-                upper_line = line.upper()
-                
-                if 'COMPLETION' in upper_line or 'SUGGESTION' in upper_line:
-                    current_section = 'suggestions'
-                elif 'TOPIC' in upper_line:
-                    current_section = 'topics'
-                elif line.startswith('-') or line.startswith('•'):
-                    item = line.lstrip('-•* ').strip()
-                    if item:
-                        if current_section == 'suggestions':
-                            suggestions.append(item)
-                        elif current_section == 'topics':
-                            topics.append(item)
-            
-            # Ensure we have at least some suggestions
-            if not suggestions:
-                suggestions = ["continue the thought", "ask a question", "share more details"]
-            if not topics:
-                topics = ["current discussion", "related ideas"]
-            
-            return suggestions[:5], topics[:3]
-            
-        except Exception as e:
-            logger.error(f"Context suggestions error: {e}")
-            return (
-                ["continue the conversation", "ask for clarification", "share thoughts"],
-                ["discussion topic", "related subjects"]
-            )
+    
 
 
 def serve():
@@ -377,6 +250,6 @@ def serve():
 
 if __name__ == "__main__":
     print("\n" + "=" * 60)
-    print(" Gemini 2.0 Flash LLM Server")
+    print(" Gemini 2.5 Flash LLM Server")
     print("=" * 60)
     serve()

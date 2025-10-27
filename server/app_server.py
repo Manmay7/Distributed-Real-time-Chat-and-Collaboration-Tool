@@ -902,12 +902,12 @@ def serve(port: int, node_id: int):
     server.start()
     
     logger.info(f"Application server (Node {node_id}) started on port {port}")
-    logger.info(f"✓ User persistence enabled - users saved to disk")
-    logger.info(f"✓ Real-time messaging enabled")
-    logger.info(f"✓ Direct messages enabled")
-    logger.info(f"✓ File transfer enabled")
-    logger.info(f"✓ Create channel feature enabled")
-    logger.info(f"✓ Channel admin management enabled")
+    logger.info(f" User persistence enabled - users saved to disk")
+    logger.info(f" Real-time messaging enabled")
+    logger.info(f" Direct messages enabled")
+    logger.info(f" File transfer enabled")
+    logger.info(f" Create channel feature enabled")
+    logger.info(f" Channel admin management enabled")
     
     try:
         server.wait_for_termination()
