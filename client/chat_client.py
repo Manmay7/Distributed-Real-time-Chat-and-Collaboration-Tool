@@ -602,13 +602,13 @@ class ChatClient(cmd.Cmd):
                 with open(filepath, 'wb') as f:
                     f.write(response.file_data)
                 
-                print(f"✓ Downloaded: {filepath}")
+                print(f"  Downloaded: {filepath}")
                 print(f"  Size: {len(response.file_data)} bytes")
             else:
-                print(f"✗ Download failed")
+                print(f"Download failed")
                 
         except Exception as e:
-            print(f"✗ Error: {e}")
+            print(f"Error: {e}")
     
     def do_files(self, arg):
         """List files in current channel"""
@@ -640,7 +640,7 @@ class ChatClient(cmd.Cmd):
                 else:
                     print("No files in this channel")
         except Exception as e:
-            print(f"✗ Error: {e}")
+            print(f"Error: {e}")
     
     def do_history(self, arg):
         """Show message history: history [limit]"""
@@ -691,7 +691,7 @@ class ChatClient(cmd.Cmd):
                 print("-" * 50)
                 print(f"Total: {len(online_users)} online, {len(offline_users)} offline")
         except Exception as e:
-            print(f"✗ Error: {e}")
+            print(f"Error: {e}")
     
     def do_clear(self, arg):
         """Clear the screen"""
@@ -762,7 +762,7 @@ class ChatClient(cmd.Cmd):
     def do_ask_llm(self, arg):
         """Ask LLM: ask_llm <question>"""
         if not self.llm_stub:
-            print("✗ LLM server not available")
+            print("LLM server not available")
             return
         
         if not arg:
@@ -770,7 +770,7 @@ class ChatClient(cmd.Cmd):
             return
         
         try:
-            print("🤖 Asking LLM...")
+            print("Asking LLM...")
             request = llm_service_pb2.LLMRequest(
                 request_id=str(uuid.uuid4()),
                 query=arg,
@@ -778,17 +778,17 @@ class ChatClient(cmd.Cmd):
             )
             
             response = self.llm_stub.GetLLMAnswer(request)
-            print(f"\n🤖 LLM Response:")
+            print(f"\nLLM Response:")
             print(f"   {response.answer}")
             print(f"   Confidence: {response.confidence:.2f}\n")
             
         except Exception as e:
-            print(f"✗ LLM Error: {e}")
+            print(f"LLM Error: {e}")
     
     def do_smart_reply(self, arg):
         """Get smart reply suggestions"""
         if not self.llm_stub:
-            print("✗ LLM server not available")
+            print("LLM server not available")
             return
         
         if not self.token or not self.current_channel or self.dm_mode:
@@ -796,7 +796,7 @@ class ChatClient(cmd.Cmd):
             return
         
         try:
-            print("💡 Getting smart replies...")
+            print("Getting smart replies...")
             
             msg_request = chat_service_pb2.GetRequest(
                 token=self.token,
@@ -825,7 +825,7 @@ class ChatClient(cmd.Cmd):
                 
                 response = self.llm_stub.GetSmartReply(request)
                 
-                print(f"\n💡 Smart Reply Suggestions:")
+                print(f"\nSmart Reply Suggestions:")
                 for i, suggestion in enumerate(response.suggestions, 1):
                     print(f"   {i}. {suggestion}")
                 print("\nUse: send_reply <number>")
@@ -835,7 +835,7 @@ class ChatClient(cmd.Cmd):
                 print("No recent messages for suggestions")
                 
         except Exception as e:
-            print(f"✗ Error: {e}")
+            print(f"Error: {e}")
     
     def do_send_reply(self, arg):
         """Send smart reply: send_reply <number>"""
@@ -856,7 +856,7 @@ class ChatClient(cmd.Cmd):
     def do_summarize(self, arg):
         """Summarize conversation: summarize [limit]"""
         if not self.llm_stub:
-            print("✗ LLM server not available")
+            print("LLM server not available")
             return
         
         if not self.token or not self.current_channel or self.dm_mode:
@@ -871,7 +871,7 @@ class ChatClient(cmd.Cmd):
                 pass
         
         try:
-            print("📋 Summarizing...")
+            print("Summarizing...")
             
             msg_request = chat_service_pb2.GetRequest(
                 token=self.token,
@@ -900,10 +900,10 @@ class ChatClient(cmd.Cmd):
                 
                 response = self.llm_stub.SummarizeConversation(request)
                 
-                print(f"\n📋 Summary:")
+                print(f"\nSummary:")
                 print(f"   {response.summary}")
                 if response.key_points:
-                    print(f"\n🔑 Key Points:")
+                    print(f"\nKey Points:")
                     for point in response.key_points:
                         print(f"   • {point}")
                 print()
@@ -911,12 +911,12 @@ class ChatClient(cmd.Cmd):
                 print("No messages to summarize")
                 
         except Exception as e:
-            print(f"✗ Error: {e}")
+            print(f"Error: {e}")
     
     def do_context_help(self, arg):
         """Get context suggestions: context_help [text]"""
         if not self.llm_stub:
-            print("✗ LLM server not available")
+            print("LLM server not available")
             return
         
         if not self.token or not self.current_channel or self.dm_mode:
@@ -924,7 +924,7 @@ class ChatClient(cmd.Cmd):
             return
         
         try:
-            print("🔍 Getting suggestions...")
+            print("Getting suggestions...")
             
             msg_request = chat_service_pb2.GetRequest(
                 token=self.token,
@@ -953,24 +953,24 @@ class ChatClient(cmd.Cmd):
             
             response = self.llm_stub.GetContextSuggestions(request)
             
-            print(f"\n🔍 Context Suggestions:")
+            print(f"\nContext Suggestions:")
             for suggestion in response.suggestions:
                 print(f"   • {suggestion}")
             
             if response.topics:
-                print(f"\n📝 Topics:")
+                print(f"\nTopics:")
                 for topic in response.topics:
                     print(f"   • {topic}")
             print()
                     
         except Exception as e:
-            print(f"✗ Error: {e}")
+            print(f"Error: {e}")
     
     def do_exit(self, arg):
         """Exit the application"""
         if self.token:
             self.do_logout("")
-        print("Goodbye! 👋")
+        print("Goodbye!")
         return True
     
     # def do_quit(self, arg):
@@ -996,10 +996,10 @@ class ChatClient(cmd.Cmd):
                         if join_resp.success:
                             self.current_channel = channel.channel_id
                             self.current_channel_name = "general"
-                            print(f"✓ Auto-joined #general")
+                            print(f"Auto-joined #general")
                         break
         except Exception as e:
-            print(f"⚠ Could not auto-join general: {e}")
+            print(f"Could not auto-join general: {e}")
     
     def _check_conversations(self):
         """Check for unread DMs on login"""
@@ -1010,7 +1010,7 @@ class ChatClient(cmd.Cmd):
             if response.success:
                 unread_count = sum(conv.unread_count for conv in response.conversations)
                 if unread_count > 0:
-                    print(f"\n💬 You have {unread_count} unread DM(s)")
+                    print(f"\nYou have {unread_count} unread DM(s)")
                     print("   Type 'conversations' to view")
         except Exception as e:
             pass
@@ -1029,7 +1029,7 @@ class ChatClient(cmd.Cmd):
             
             if response.success:
                 if response.messages:
-                    print(f"\n📝 Recent Messages (last {limit}):")
+                    print(f"\nRecent Messages (last {limit}):")
                     print("-" * 50)
                     for msg in response.messages:
                         timestamp = datetime.now().strftime("%H:%M")
@@ -1038,7 +1038,7 @@ class ChatClient(cmd.Cmd):
                 else:
                     print("No messages yet")
         except Exception as e:
-            print(f"✗ Error: {e}")
+            print(f"Error: {e}")
     
     def emptyline(self):
         """Don't repeat last command on empty line"""
@@ -1079,7 +1079,7 @@ def main():
         client = ChatClient(args.server, args.llm_server)
         client.cmdloop()
     except KeyboardInterrupt:
-        print("\n\nInterrupted by user. Goodbye! 👋")
+        print("\n\nInterrupted by user. Goodbye!")
         sys.exit(0)
     except Exception as e:
         print(f"Fatal error: {e}")
