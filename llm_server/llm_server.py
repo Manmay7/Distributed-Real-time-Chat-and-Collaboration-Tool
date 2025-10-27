@@ -28,12 +28,11 @@ class LLMServicer(llm_service_pb2_grpc.LLMServiceServicer):
         """Initialize Gemini 2.0 Flash API"""
         try:
             genai.configure(api_key=self.gemini_api_key)
-            self.model = genai.GenerativeModel('gemini-2.0-flash-exp')
+            self.model = genai.GenerativeModel('gemini-2.5-flash')
+            self.backend = "gemini"
             
-            logger.info("=" * 60)
-            logger.info("✓ Gemini 2.0 Flash (Experimental) Initialized!")
-            logger.info("  Model: gemini-2.0-flash-exp")
-            logger.info("  Latest & Smartest Google AI Model")
+            logger.info("  Using Gemini Flash API (much smarter responses!)")
+            logger.info("  Model: gemini-2.5-flash")
             logger.info("  Free tier: 15 requests/minute")
             logger.info("=" * 60)
             
@@ -334,12 +333,12 @@ def serve():
     
     if not gemini_api_key:
         print("\n" + "=" * 60)
-        print("⚠️  GEMINI API KEY REQUIRED")
+        print("GEMINI API KEY REQUIRED")
         print("=" * 60)
-        print("\n📝 To use this LLM server, you need a Gemini API key.")
-        print("\n🔑 Get your FREE API key:")
+        print("\nTo use this LLM server, you need a Gemini API key.")
+        print("\nGet your FREE API key:")
         print("   https://makersuite.google.com/app/apikey")
-        print("\n💡 Then set it as an environment variable:")
+        print("\nThen set it as an environment variable:")
         print("   Linux/Mac:  export GEMINI_API_KEY='your-key-here'")
         print("   Windows:    set GEMINI_API_KEY=your-key-here")
         print("\n" + "=" * 60 + "\n")
@@ -347,7 +346,7 @@ def serve():
         gemini_api_key = input("Or enter your Gemini API key now: ").strip()
         
         if not gemini_api_key:
-            print("\n❌ No API key provided. Exiting...")
+            print("\nNo API key provided. Exiting...")
             return
     
     try:
@@ -363,21 +362,21 @@ def serve():
         server.add_insecure_port(f'[::]:{port}')
         server.start()
         
-        logger.info(f"\n🚀 LLM Server running on port {port}")
-        logger.info("📡 Ready to process AI requests...\n")
+        logger.info(f"\n LLM Server running on port {port}")
+        logger.info(" Ready to process AI requests...\n")
         
         server.wait_for_termination()
         
     except KeyboardInterrupt:
-        logger.info("\n👋 Shutting down LLM server...")
+        logger.info("\n Shutting down LLM server...")
         server.stop(0)
     except Exception as e:
-        logger.error(f"\n❌ Fatal error: {e}")
+        logger.error(f"\n Fatal error: {e}")
         logger.error("Please check your API key and internet connection.")
 
 
 if __name__ == "__main__":
     print("\n" + "=" * 60)
-    print("🤖 Gemini 2.0 Flash LLM Server")
+    print(" Gemini 2.0 Flash LLM Server")
     print("=" * 60)
     serve()
