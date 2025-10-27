@@ -745,11 +745,11 @@ class ChatClient(cmd.Cmd):
         print("\n" + "="*60)
         print("AI/LLM COMMANDS")
         print("="*60)
-        print("  ask_llm <question>        - Ask AI a question")
+        
         print("  smart_reply               - Get AI reply suggestions")
         print("  send_reply <number>       - Send AI suggestion")
         print("  summarize [limit]         - Summarize conversation")
-        print("  context_help [text]       - Get context suggestions")
+        
         
         print("\n" + "="*60)
         print("OTHER COMMANDS")
@@ -759,31 +759,7 @@ class ChatClient(cmd.Cmd):
         print("  exit                      - Exit application")
         print("="*60 + "\n")
     
-    def do_ask_llm(self, arg):
-        """Ask LLM: ask_llm <question>"""
-        if not self.llm_stub:
-            print("LLM server not available")
-            return
-        
-        if not arg:
-            print("Usage: ask_llm <question>")
-            return
-        
-        try:
-            print("Asking LLM...")
-            request = llm_service_pb2.LLMRequest(
-                request_id=str(uuid.uuid4()),
-                query=arg,
-                context=[]
-            )
-            
-            response = self.llm_stub.GetLLMAnswer(request)
-            print(f"\nLLM Response:")
-            print(f"   {response.answer}")
-            print(f"   Confidence: {response.confidence:.2f}\n")
-            
-        except Exception as e:
-            print(f"LLM Error: {e}")
+    
     
     def do_smart_reply(self, arg):
         """Get smart reply suggestions"""
@@ -913,58 +889,7 @@ class ChatClient(cmd.Cmd):
         except Exception as e:
             print(f"Error: {e}")
     
-    def do_context_help(self, arg):
-        """Get context suggestions: context_help [text]"""
-        if not self.llm_stub:
-            print("LLM server not available")
-            return
-        
-        if not self.token or not self.current_channel or self.dm_mode:
-            print("Only works in channels")
-            return
-        
-        try:
-            print("Getting suggestions...")
-            
-            msg_request = chat_service_pb2.GetRequest(
-                token=self.token,
-                type="messages",
-                channel_id=self.current_channel,
-                limit=5,
-                offset=0
-            )
-            msg_response = self.stub.GetMessages(msg_request)
-            
-            llm_messages = []
-            if msg_response.success and msg_response.messages:
-                for msg in msg_response.messages:
-                    llm_msg = llm_service_pb2.ChatMessage(
-                        sender=msg.sender_name,
-                        content=msg.content,
-                        timestamp=int(time.time())
-                    )
-                    llm_messages.append(llm_msg)
-            
-            request = llm_service_pb2.ContextRequest(
-                request_id=str(uuid.uuid4()),
-                context=llm_messages,
-                current_input=arg if arg else ""
-            )
-            
-            response = self.llm_stub.GetContextSuggestions(request)
-            
-            print(f"\nContext Suggestions:")
-            for suggestion in response.suggestions:
-                print(f"   • {suggestion}")
-            
-            if response.topics:
-                print(f"\nTopics:")
-                for topic in response.topics:
-                    print(f"   • {topic}")
-            print()
-                    
-        except Exception as e:
-            print(f"Error: {e}")
+    
     
     def do_exit(self, arg):
         """Exit the application"""
