@@ -3,7 +3,7 @@
 import grpc
 import warnings
 
-from generated import llm_service_pb2 as llm__service__pb2
+import chat_client_pb2 as chat__client__pb2
 
 GRPC_GENERATED_VERSION = '1.76.0'
 GRPC_VERSION = grpc.__version__
@@ -18,14 +18,14 @@ except ImportError:
 if _version_not_supported:
     raise RuntimeError(
         f'The grpc package installed is at version {GRPC_VERSION},'
-        + ' but the generated code in llm_service_pb2_grpc.py depends on'
+        + ' but the generated code in chat_client_pb2_grpc.py depends on'
         + f' grpcio>={GRPC_GENERATED_VERSION}.'
         + f' Please upgrade your grpc module to grpcio>={GRPC_GENERATED_VERSION}'
         + f' or downgrade your generated code using grpcio-tools<={GRPC_VERSION}.'
     )
 
 
-class LLMServiceStub(object):
+class ChatServiceStub(object):
     """Missing associated documentation comment in .proto file."""
 
     def __init__(self, channel):
@@ -34,91 +34,91 @@ class LLMServiceStub(object):
         Args:
             channel: A grpc.Channel.
         """
-        self.GetLLMAnswer = channel.unary_unary(
-                '/llm.LLMService/GetLLMAnswer',
-                request_serializer=llm__service__pb2.LLMRequest.SerializeToString,
-                response_deserializer=llm__service__pb2.LLMResponse.FromString,
+        self.SendMessage = channel.unary_unary(
+                '/chat.ChatService/SendMessage',
+                request_serializer=chat__client__pb2.ChatMessageRequest.SerializeToString,
+                response_deserializer=chat__client__pb2.ChatMessageResponse.FromString,
                 _registered_method=True)
-        self.GetSmartReply = channel.unary_unary(
-                '/llm.LLMService/GetSmartReply',
-                request_serializer=llm__service__pb2.SmartReplyRequest.SerializeToString,
-                response_deserializer=llm__service__pb2.SmartReplyResponse.FromString,
+        self.GetMessages = channel.unary_unary(
+                '/chat.ChatService/GetMessages',
+                request_serializer=chat__client__pb2.GetMessagesRequest.SerializeToString,
+                response_deserializer=chat__client__pb2.GetMessagesResponse.FromString,
                 _registered_method=True)
-        self.SummarizeConversation = channel.unary_unary(
-                '/llm.LLMService/SummarizeConversation',
-                request_serializer=llm__service__pb2.SummarizeRequest.SerializeToString,
-                response_deserializer=llm__service__pb2.SummarizeResponse.FromString,
+        self.StreamMessages = channel.unary_stream(
+                '/chat.ChatService/StreamMessages',
+                request_serializer=chat__client__pb2.StreamMessagesRequest.SerializeToString,
+                response_deserializer=chat__client__pb2.ChatMessageResponse.FromString,
                 _registered_method=True)
-        self.GetContextSuggestions = channel.unary_unary(
-                '/llm.LLMService/GetContextSuggestions',
-                request_serializer=llm__service__pb2.ContextRequest.SerializeToString,
-                response_deserializer=llm__service__pb2.SuggestionsResponse.FromString,
+        self.GetLeader = channel.unary_unary(
+                '/chat.ChatService/GetLeader',
+                request_serializer=chat__client__pb2.GetLeaderRequest.SerializeToString,
+                response_deserializer=chat__client__pb2.GetLeaderResponse.FromString,
                 _registered_method=True)
 
 
-class LLMServiceServicer(object):
+class ChatServiceServicer(object):
     """Missing associated documentation comment in .proto file."""
 
-    def GetLLMAnswer(self, request, context):
+    def SendMessage(self, request, context):
         """Missing associated documentation comment in .proto file."""
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
-    def GetSmartReply(self, request, context):
+    def GetMessages(self, request, context):
         """Missing associated documentation comment in .proto file."""
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
-    def SummarizeConversation(self, request, context):
+    def StreamMessages(self, request, context):
         """Missing associated documentation comment in .proto file."""
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
-    def GetContextSuggestions(self, request, context):
+    def GetLeader(self, request, context):
         """Missing associated documentation comment in .proto file."""
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
 
-def add_LLMServiceServicer_to_server(servicer, server):
+def add_ChatServiceServicer_to_server(servicer, server):
     rpc_method_handlers = {
-            'GetLLMAnswer': grpc.unary_unary_rpc_method_handler(
-                    servicer.GetLLMAnswer,
-                    request_deserializer=llm__service__pb2.LLMRequest.FromString,
-                    response_serializer=llm__service__pb2.LLMResponse.SerializeToString,
+            'SendMessage': grpc.unary_unary_rpc_method_handler(
+                    servicer.SendMessage,
+                    request_deserializer=chat__client__pb2.ChatMessageRequest.FromString,
+                    response_serializer=chat__client__pb2.ChatMessageResponse.SerializeToString,
             ),
-            'GetSmartReply': grpc.unary_unary_rpc_method_handler(
-                    servicer.GetSmartReply,
-                    request_deserializer=llm__service__pb2.SmartReplyRequest.FromString,
-                    response_serializer=llm__service__pb2.SmartReplyResponse.SerializeToString,
+            'GetMessages': grpc.unary_unary_rpc_method_handler(
+                    servicer.GetMessages,
+                    request_deserializer=chat__client__pb2.GetMessagesRequest.FromString,
+                    response_serializer=chat__client__pb2.GetMessagesResponse.SerializeToString,
             ),
-            'SummarizeConversation': grpc.unary_unary_rpc_method_handler(
-                    servicer.SummarizeConversation,
-                    request_deserializer=llm__service__pb2.SummarizeRequest.FromString,
-                    response_serializer=llm__service__pb2.SummarizeResponse.SerializeToString,
+            'StreamMessages': grpc.unary_stream_rpc_method_handler(
+                    servicer.StreamMessages,
+                    request_deserializer=chat__client__pb2.StreamMessagesRequest.FromString,
+                    response_serializer=chat__client__pb2.ChatMessageResponse.SerializeToString,
             ),
-            'GetContextSuggestions': grpc.unary_unary_rpc_method_handler(
-                    servicer.GetContextSuggestions,
-                    request_deserializer=llm__service__pb2.ContextRequest.FromString,
-                    response_serializer=llm__service__pb2.SuggestionsResponse.SerializeToString,
+            'GetLeader': grpc.unary_unary_rpc_method_handler(
+                    servicer.GetLeader,
+                    request_deserializer=chat__client__pb2.GetLeaderRequest.FromString,
+                    response_serializer=chat__client__pb2.GetLeaderResponse.SerializeToString,
             ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
-            'llm.LLMService', rpc_method_handlers)
+            'chat.ChatService', rpc_method_handlers)
     server.add_generic_rpc_handlers((generic_handler,))
-    server.add_registered_method_handlers('llm.LLMService', rpc_method_handlers)
+    server.add_registered_method_handlers('chat.ChatService', rpc_method_handlers)
 
 
  # This class is part of an EXPERIMENTAL API.
-class LLMService(object):
+class ChatService(object):
     """Missing associated documentation comment in .proto file."""
 
     @staticmethod
-    def GetLLMAnswer(request,
+    def SendMessage(request,
             target,
             options=(),
             channel_credentials=None,
@@ -131,9 +131,9 @@ class LLMService(object):
         return grpc.experimental.unary_unary(
             request,
             target,
-            '/llm.LLMService/GetLLMAnswer',
-            llm__service__pb2.LLMRequest.SerializeToString,
-            llm__service__pb2.LLMResponse.FromString,
+            '/chat.ChatService/SendMessage',
+            chat__client__pb2.ChatMessageRequest.SerializeToString,
+            chat__client__pb2.ChatMessageResponse.FromString,
             options,
             channel_credentials,
             insecure,
@@ -145,7 +145,7 @@ class LLMService(object):
             _registered_method=True)
 
     @staticmethod
-    def GetSmartReply(request,
+    def GetMessages(request,
             target,
             options=(),
             channel_credentials=None,
@@ -158,9 +158,9 @@ class LLMService(object):
         return grpc.experimental.unary_unary(
             request,
             target,
-            '/llm.LLMService/GetSmartReply',
-            llm__service__pb2.SmartReplyRequest.SerializeToString,
-            llm__service__pb2.SmartReplyResponse.FromString,
+            '/chat.ChatService/GetMessages',
+            chat__client__pb2.GetMessagesRequest.SerializeToString,
+            chat__client__pb2.GetMessagesResponse.FromString,
             options,
             channel_credentials,
             insecure,
@@ -172,7 +172,7 @@ class LLMService(object):
             _registered_method=True)
 
     @staticmethod
-    def SummarizeConversation(request,
+    def StreamMessages(request,
             target,
             options=(),
             channel_credentials=None,
@@ -182,12 +182,12 @@ class LLMService(object):
             wait_for_ready=None,
             timeout=None,
             metadata=None):
-        return grpc.experimental.unary_unary(
+        return grpc.experimental.unary_stream(
             request,
             target,
-            '/llm.LLMService/SummarizeConversation',
-            llm__service__pb2.SummarizeRequest.SerializeToString,
-            llm__service__pb2.SummarizeResponse.FromString,
+            '/chat.ChatService/StreamMessages',
+            chat__client__pb2.StreamMessagesRequest.SerializeToString,
+            chat__client__pb2.ChatMessageResponse.FromString,
             options,
             channel_credentials,
             insecure,
@@ -199,7 +199,7 @@ class LLMService(object):
             _registered_method=True)
 
     @staticmethod
-    def GetContextSuggestions(request,
+    def GetLeader(request,
             target,
             options=(),
             channel_credentials=None,
@@ -212,9 +212,9 @@ class LLMService(object):
         return grpc.experimental.unary_unary(
             request,
             target,
-            '/llm.LLMService/GetContextSuggestions',
-            llm__service__pb2.ContextRequest.SerializeToString,
-            llm__service__pb2.SuggestionsResponse.FromString,
+            '/chat.ChatService/GetLeader',
+            chat__client__pb2.GetLeaderRequest.SerializeToString,
+            chat__client__pb2.GetLeaderResponse.FromString,
             options,
             channel_credentials,
             insecure,
