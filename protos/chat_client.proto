@@ -1,0 +1,43 @@
+syntax = "proto3";
+
+package chat;
+
+service ChatService {
+  rpc SendMessage(ChatMessageRequest) returns (ChatMessageResponse);
+  rpc GetMessages(GetMessagesRequest) returns (GetMessagesResponse);
+  rpc StreamMessages(StreamMessagesRequest) returns (stream ChatMessageResponse);
+  rpc GetLeader(GetLeaderRequest) returns (GetLeaderResponse);
+}
+
+message ChatMessageRequest {
+  string user = 1;
+  string message = 2;
+  string room = 3;
+}
+
+message ChatMessageResponse {
+  bool success = 1;
+  string message = 2;
+  string user = 3;
+  string room = 4;
+  int64 timestamp = 5;
+}
+
+message GetMessagesRequest {
+  string room = 1;
+}
+
+message GetMessagesResponse {
+  repeated ChatMessageResponse messages = 1;
+}
+
+message StreamMessagesRequest {
+  string room = 1;
+}
+
+message GetLeaderRequest {}
+
+message GetLeaderResponse {
+  int32 leader_id = 1;
+  string leader_address = 2;
+}

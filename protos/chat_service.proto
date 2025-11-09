@@ -40,6 +40,9 @@ service ChatService {
     // Admin Functions
     rpc ManageUser(ManageUserRequest) returns (StatusResponse);
     rpc ManageChannel(ManageChannelRequest) returns (StatusResponse);
+    
+    // Raft Cluster Info (NEW)
+    rpc GetServerInfo(ServerInfoRequest) returns (ServerInfoResponse);
 }
 
 // Common Messages
@@ -47,6 +50,9 @@ message StatusResponse {
     bool success = 1;
     string message = 2;
     int32 code = 3;
+    // Raft-specific fields for write operations
+    string error = 4;                // Error type: "NOT_LEADER", etc.
+    string leader_address = 5;        // Leader address for redirection
 }
 
 // Authentication Messages
@@ -74,6 +80,9 @@ message SignupResponse {
     string message = 2;
     int32 code = 3;
     UserInfo user_info = 4;
+    // Raft-specific fields
+    string error = 5;
+    string leader_address = 6;
 }
 
 message LogoutRequest {
@@ -258,6 +267,9 @@ message FileUploadResponse {
     string message = 2;
     string file_id = 3;
     string file_url = 4;
+    // Raft-specific fields
+    string error = 5;
+    string leader_address = 6;
 }
 
 message FileDownloadRequest {
@@ -305,4 +317,21 @@ message ManageChannelRequest {
     string channel_id = 2;
     string action = 3;
     map<string, string> parameters = 4;
+}
+
+// Raft Cluster Info Messages (NEW)
+message ServerInfoRequest {
+    // Empty - just asking for server/cluster info
+}
+
+message ServerInfoResponse {
+    bool is_leader = 1;              // Is this node the leader?
+    int32 node_id = 2;               // This node's ID
+    string state = 3;                // Node state (leader/follower/candidate)
+    int32 current_term = 4;          // Current Raft term
+    string leader_address = 5;       // Leader's address (for redirection)
+    int32 leader_id = 6;             // Leader's node ID
+    int32 log_size = 7;              // Size of the log
+    int32 commit_index = 8;          // Last committed log index
+    repeated string cluster_nodes = 9; // All nodes in cluster
 }

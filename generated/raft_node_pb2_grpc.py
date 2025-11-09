@@ -3,7 +3,7 @@
 import grpc
 import warnings
 
-from generated import chat_service_pb2 as chat__service__pb2
+from generated import raft_node_pb2 as raft__node__pb2
 
 GRPC_GENERATED_VERSION = '1.76.0'
 GRPC_VERSION = grpc.__version__
@@ -18,14 +18,14 @@ except ImportError:
 if _version_not_supported:
     raise RuntimeError(
         f'The grpc package installed is at version {GRPC_VERSION},'
-        + ' but the generated code in chat_service_pb2_grpc.py depends on'
+        + ' but the generated code in raft_node_pb2_grpc.py depends on'
         + f' grpcio>={GRPC_GENERATED_VERSION}.'
         + f' Please upgrade your grpc module to grpcio>={GRPC_GENERATED_VERSION}'
         + f' or downgrade your generated code using grpcio-tools<={GRPC_VERSION}.'
     )
 
 
-class ChatServiceStub(object):
+class RaftNodeStub(object):
     """Missing associated documentation comment in .proto file."""
 
     def __init__(self, channel):
@@ -34,124 +34,143 @@ class ChatServiceStub(object):
         Args:
             channel: A grpc.Channel.
         """
-        self.Login = channel.unary_unary(
-                '/chat.ChatService/Login',
-                request_serializer=chat__service__pb2.LoginRequest.SerializeToString,
-                response_deserializer=chat__service__pb2.LoginResponse.FromString,
+        self.RequestVote = channel.unary_unary(
+                '/raft.RaftNode/RequestVote',
+                request_serializer=raft__node__pb2.VoteRequest.SerializeToString,
+                response_deserializer=raft__node__pb2.VoteResponse.FromString,
+                _registered_method=True)
+        self.AppendEntries = channel.unary_unary(
+                '/raft.RaftNode/AppendEntries',
+                request_serializer=raft__node__pb2.AppendEntriesRequest.SerializeToString,
+                response_deserializer=raft__node__pb2.AppendEntriesResponse.FromString,
+                _registered_method=True)
+        self.GetLeaderInfo = channel.unary_unary(
+                '/raft.RaftNode/GetLeaderInfo',
+                request_serializer=raft__node__pb2.GetLeaderRequest.SerializeToString,
+                response_deserializer=raft__node__pb2.GetLeaderResponse.FromString,
                 _registered_method=True)
         self.Signup = channel.unary_unary(
-                '/chat.ChatService/Signup',
-                request_serializer=chat__service__pb2.SignupRequest.SerializeToString,
-                response_deserializer=chat__service__pb2.SignupResponse.FromString,
+                '/raft.RaftNode/Signup',
+                request_serializer=raft__node__pb2.SignupRequest.SerializeToString,
+                response_deserializer=raft__node__pb2.SignupResponse.FromString,
+                _registered_method=True)
+        self.Login = channel.unary_unary(
+                '/raft.RaftNode/Login',
+                request_serializer=raft__node__pb2.LoginRequest.SerializeToString,
+                response_deserializer=raft__node__pb2.LoginResponse.FromString,
                 _registered_method=True)
         self.Logout = channel.unary_unary(
-                '/chat.ChatService/Logout',
-                request_serializer=chat__service__pb2.LogoutRequest.SerializeToString,
-                response_deserializer=chat__service__pb2.StatusResponse.FromString,
-                _registered_method=True)
-        self.StreamMessages = channel.unary_stream(
-                '/chat.ChatService/StreamMessages',
-                request_serializer=chat__service__pb2.StreamRequest.SerializeToString,
-                response_deserializer=chat__service__pb2.MessageEvent.FromString,
-                _registered_method=True)
-        self.PostMessage = channel.unary_unary(
-                '/chat.ChatService/PostMessage',
-                request_serializer=chat__service__pb2.PostRequest.SerializeToString,
-                response_deserializer=chat__service__pb2.StatusResponse.FromString,
-                _registered_method=True)
-        self.GetMessages = channel.unary_unary(
-                '/chat.ChatService/GetMessages',
-                request_serializer=chat__service__pb2.GetRequest.SerializeToString,
-                response_deserializer=chat__service__pb2.GetResponse.FromString,
-                _registered_method=True)
-        self.SendDirectMessage = channel.unary_unary(
-                '/chat.ChatService/SendDirectMessage',
-                request_serializer=chat__service__pb2.DirectMessageRequest.SerializeToString,
-                response_deserializer=chat__service__pb2.StatusResponse.FromString,
-                _registered_method=True)
-        self.GetDirectMessages = channel.unary_unary(
-                '/chat.ChatService/GetDirectMessages',
-                request_serializer=chat__service__pb2.GetDirectMessagesRequest.SerializeToString,
-                response_deserializer=chat__service__pb2.DirectMessageResponse.FromString,
-                _registered_method=True)
-        self.ListConversations = channel.unary_unary(
-                '/chat.ChatService/ListConversations',
-                request_serializer=chat__service__pb2.ListConversationsRequest.SerializeToString,
-                response_deserializer=chat__service__pb2.ConversationsResponse.FromString,
+                '/raft.RaftNode/Logout',
+                request_serializer=raft__node__pb2.LogoutRequest.SerializeToString,
+                response_deserializer=raft__node__pb2.StatusResponse.FromString,
                 _registered_method=True)
         self.CreateChannel = channel.unary_unary(
-                '/chat.ChatService/CreateChannel',
-                request_serializer=chat__service__pb2.CreateChannelRequest.SerializeToString,
-                response_deserializer=chat__service__pb2.StatusResponse.FromString,
-                _registered_method=True)
-        self.JoinChannel = channel.unary_unary(
-                '/chat.ChatService/JoinChannel',
-                request_serializer=chat__service__pb2.JoinChannelRequest.SerializeToString,
-                response_deserializer=chat__service__pb2.StatusResponse.FromString,
-                _registered_method=True)
-        self.LeaveChannel = channel.unary_unary(
-                '/chat.ChatService/LeaveChannel',
-                request_serializer=chat__service__pb2.LeaveChannelRequest.SerializeToString,
-                response_deserializer=chat__service__pb2.StatusResponse.FromString,
+                '/raft.RaftNode/CreateChannel',
+                request_serializer=raft__node__pb2.CreateChannelRequest.SerializeToString,
+                response_deserializer=raft__node__pb2.StatusResponse.FromString,
                 _registered_method=True)
         self.GetChannels = channel.unary_unary(
-                '/chat.ChatService/GetChannels',
-                request_serializer=chat__service__pb2.GetChannelsRequest.SerializeToString,
-                response_deserializer=chat__service__pb2.ChannelListResponse.FromString,
+                '/raft.RaftNode/GetChannels',
+                request_serializer=raft__node__pb2.GetChannelsRequest.SerializeToString,
+                response_deserializer=raft__node__pb2.ChannelListResponse.FromString,
+                _registered_method=True)
+        self.JoinChannel = channel.unary_unary(
+                '/raft.RaftNode/JoinChannel',
+                request_serializer=raft__node__pb2.JoinChannelRequest.SerializeToString,
+                response_deserializer=raft__node__pb2.StatusResponse.FromString,
+                _registered_method=True)
+        self.SendMessage = channel.unary_unary(
+                '/raft.RaftNode/SendMessage',
+                request_serializer=raft__node__pb2.SendMessageRequest.SerializeToString,
+                response_deserializer=raft__node__pb2.StatusResponse.FromString,
+                _registered_method=True)
+        self.GetMessages = channel.unary_unary(
+                '/raft.RaftNode/GetMessages',
+                request_serializer=raft__node__pb2.GetMessagesRequest.SerializeToString,
+                response_deserializer=raft__node__pb2.MessageListResponse.FromString,
+                _registered_method=True)
+        self.SendDirectMessage = channel.unary_unary(
+                '/raft.RaftNode/SendDirectMessage',
+                request_serializer=raft__node__pb2.DirectMessageRequest.SerializeToString,
+                response_deserializer=raft__node__pb2.StatusResponse.FromString,
+                _registered_method=True)
+        self.GetDirectMessages = channel.unary_unary(
+                '/raft.RaftNode/GetDirectMessages',
+                request_serializer=raft__node__pb2.GetDirectMessagesRequest.SerializeToString,
+                response_deserializer=raft__node__pb2.DirectMessageListResponse.FromString,
                 _registered_method=True)
         self.GetOnlineUsers = channel.unary_unary(
-                '/chat.ChatService/GetOnlineUsers',
-                request_serializer=chat__service__pb2.GetOnlineUsersRequest.SerializeToString,
-                response_deserializer=chat__service__pb2.UserListResponse.FromString,
+                '/raft.RaftNode/GetOnlineUsers',
+                request_serializer=raft__node__pb2.GetOnlineUsersRequest.SerializeToString,
+                response_deserializer=raft__node__pb2.UserListResponse.FromString,
                 _registered_method=True)
-        self.UpdatePresence = channel.unary_unary(
-                '/chat.ChatService/UpdatePresence',
-                request_serializer=chat__service__pb2.UpdatePresenceRequest.SerializeToString,
-                response_deserializer=chat__service__pb2.StatusResponse.FromString,
+        self.ListConversations = channel.unary_unary(
+                '/raft.RaftNode/ListConversations',
+                request_serializer=raft__node__pb2.ListConversationsRequest.SerializeToString,
+                response_deserializer=raft__node__pb2.ConversationsResponse.FromString,
                 _registered_method=True)
         self.UploadFile = channel.unary_unary(
-                '/chat.ChatService/UploadFile',
-                request_serializer=chat__service__pb2.FileUploadRequest.SerializeToString,
-                response_deserializer=chat__service__pb2.FileUploadResponse.FromString,
+                '/raft.RaftNode/UploadFile',
+                request_serializer=raft__node__pb2.FileUploadRequest.SerializeToString,
+                response_deserializer=raft__node__pb2.FileUploadResponse.FromString,
                 _registered_method=True)
         self.DownloadFile = channel.unary_unary(
-                '/chat.ChatService/DownloadFile',
-                request_serializer=chat__service__pb2.FileDownloadRequest.SerializeToString,
-                response_deserializer=chat__service__pb2.FileResponse.FromString,
+                '/raft.RaftNode/DownloadFile',
+                request_serializer=raft__node__pb2.FileDownloadRequest.SerializeToString,
+                response_deserializer=raft__node__pb2.FileDownloadResponse.FromString,
                 _registered_method=True)
         self.ListFiles = channel.unary_unary(
-                '/chat.ChatService/ListFiles',
-                request_serializer=chat__service__pb2.ListFilesRequest.SerializeToString,
-                response_deserializer=chat__service__pb2.FileListResponse.FromString,
+                '/raft.RaftNode/ListFiles',
+                request_serializer=raft__node__pb2.ListFilesRequest.SerializeToString,
+                response_deserializer=raft__node__pb2.FileListResponse.FromString,
                 _registered_method=True)
-        self.ManageUser = channel.unary_unary(
-                '/chat.ChatService/ManageUser',
-                request_serializer=chat__service__pb2.ManageUserRequest.SerializeToString,
-                response_deserializer=chat__service__pb2.StatusResponse.FromString,
+        self.GetSmartReply = channel.unary_unary(
+                '/raft.RaftNode/GetSmartReply',
+                request_serializer=raft__node__pb2.SmartReplyRequest.SerializeToString,
+                response_deserializer=raft__node__pb2.SmartReplyResponse.FromString,
                 _registered_method=True)
-        self.ManageChannel = channel.unary_unary(
-                '/chat.ChatService/ManageChannel',
-                request_serializer=chat__service__pb2.ManageChannelRequest.SerializeToString,
-                response_deserializer=chat__service__pb2.StatusResponse.FromString,
+        self.SummarizeConversation = channel.unary_unary(
+                '/raft.RaftNode/SummarizeConversation',
+                request_serializer=raft__node__pb2.SummarizeRequest.SerializeToString,
+                response_deserializer=raft__node__pb2.SummarizeResponse.FromString,
                 _registered_method=True)
-        self.GetServerInfo = channel.unary_unary(
-                '/chat.ChatService/GetServerInfo',
-                request_serializer=chat__service__pb2.ServerInfoRequest.SerializeToString,
-                response_deserializer=chat__service__pb2.ServerInfoResponse.FromString,
+        self.GetLLMAnswer = channel.unary_unary(
+                '/raft.RaftNode/GetLLMAnswer',
+                request_serializer=raft__node__pb2.LLMRequest.SerializeToString,
+                response_deserializer=raft__node__pb2.LLMResponse.FromString,
                 _registered_method=True)
 
 
-class ChatServiceServicer(object):
+class RaftNodeServicer(object):
     """Missing associated documentation comment in .proto file."""
 
-    def Login(self, request, context):
-        """Authentication
+    def RequestVote(self, request, context):
+        """Raft consensus RPCs
         """
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def AppendEntries(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def GetLeaderInfo(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
     def Signup(self, request, context):
+        """User authentication
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def Login(self, request, context):
         """Missing associated documentation comment in .proto file."""
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
@@ -163,14 +182,26 @@ class ChatServiceServicer(object):
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
-    def StreamMessages(self, request, context):
-        """Real-time messaging - streaming
+    def CreateChannel(self, request, context):
+        """Channel operations
         """
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
-    def PostMessage(self, request, context):
+    def GetChannels(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def JoinChannel(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def SendMessage(self, request, context):
         """Messaging
         """
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
@@ -184,8 +215,7 @@ class ChatServiceServicer(object):
         raise NotImplementedError('Method not implemented!')
 
     def SendDirectMessage(self, request, context):
-        """Direct Messages
-        """
+        """Missing associated documentation comment in .proto file."""
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
@@ -196,52 +226,21 @@ class ChatServiceServicer(object):
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def GetOnlineUsers(self, request, context):
+        """User management
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
     def ListConversations(self, request, context):
         """Missing associated documentation comment in .proto file."""
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
-    def CreateChannel(self, request, context):
-        """Channel Management
-        """
-        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
-        context.set_details('Method not implemented!')
-        raise NotImplementedError('Method not implemented!')
-
-    def JoinChannel(self, request, context):
-        """Missing associated documentation comment in .proto file."""
-        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
-        context.set_details('Method not implemented!')
-        raise NotImplementedError('Method not implemented!')
-
-    def LeaveChannel(self, request, context):
-        """Missing associated documentation comment in .proto file."""
-        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
-        context.set_details('Method not implemented!')
-        raise NotImplementedError('Method not implemented!')
-
-    def GetChannels(self, request, context):
-        """Missing associated documentation comment in .proto file."""
-        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
-        context.set_details('Method not implemented!')
-        raise NotImplementedError('Method not implemented!')
-
-    def GetOnlineUsers(self, request, context):
-        """User Management
-        """
-        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
-        context.set_details('Method not implemented!')
-        raise NotImplementedError('Method not implemented!')
-
-    def UpdatePresence(self, request, context):
-        """Missing associated documentation comment in .proto file."""
-        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
-        context.set_details('Method not implemented!')
-        raise NotImplementedError('Method not implemented!')
-
     def UploadFile(self, request, context):
-        """File Sharing
+        """NEW: File operations
         """
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
@@ -259,147 +258,146 @@ class ChatServiceServicer(object):
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
-    def ManageUser(self, request, context):
-        """Admin Functions
+    def GetSmartReply(self, request, context):
+        """NEW: LLM features
         """
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
-    def ManageChannel(self, request, context):
+    def SummarizeConversation(self, request, context):
         """Missing associated documentation comment in .proto file."""
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
-    def GetServerInfo(self, request, context):
-        """Raft Cluster Info (NEW)
-        """
+    def GetLLMAnswer(self, request, context):
+        """Missing associated documentation comment in .proto file."""
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
 
-def add_ChatServiceServicer_to_server(servicer, server):
+def add_RaftNodeServicer_to_server(servicer, server):
     rpc_method_handlers = {
-            'Login': grpc.unary_unary_rpc_method_handler(
-                    servicer.Login,
-                    request_deserializer=chat__service__pb2.LoginRequest.FromString,
-                    response_serializer=chat__service__pb2.LoginResponse.SerializeToString,
+            'RequestVote': grpc.unary_unary_rpc_method_handler(
+                    servicer.RequestVote,
+                    request_deserializer=raft__node__pb2.VoteRequest.FromString,
+                    response_serializer=raft__node__pb2.VoteResponse.SerializeToString,
+            ),
+            'AppendEntries': grpc.unary_unary_rpc_method_handler(
+                    servicer.AppendEntries,
+                    request_deserializer=raft__node__pb2.AppendEntriesRequest.FromString,
+                    response_serializer=raft__node__pb2.AppendEntriesResponse.SerializeToString,
+            ),
+            'GetLeaderInfo': grpc.unary_unary_rpc_method_handler(
+                    servicer.GetLeaderInfo,
+                    request_deserializer=raft__node__pb2.GetLeaderRequest.FromString,
+                    response_serializer=raft__node__pb2.GetLeaderResponse.SerializeToString,
             ),
             'Signup': grpc.unary_unary_rpc_method_handler(
                     servicer.Signup,
-                    request_deserializer=chat__service__pb2.SignupRequest.FromString,
-                    response_serializer=chat__service__pb2.SignupResponse.SerializeToString,
+                    request_deserializer=raft__node__pb2.SignupRequest.FromString,
+                    response_serializer=raft__node__pb2.SignupResponse.SerializeToString,
+            ),
+            'Login': grpc.unary_unary_rpc_method_handler(
+                    servicer.Login,
+                    request_deserializer=raft__node__pb2.LoginRequest.FromString,
+                    response_serializer=raft__node__pb2.LoginResponse.SerializeToString,
             ),
             'Logout': grpc.unary_unary_rpc_method_handler(
                     servicer.Logout,
-                    request_deserializer=chat__service__pb2.LogoutRequest.FromString,
-                    response_serializer=chat__service__pb2.StatusResponse.SerializeToString,
-            ),
-            'StreamMessages': grpc.unary_stream_rpc_method_handler(
-                    servicer.StreamMessages,
-                    request_deserializer=chat__service__pb2.StreamRequest.FromString,
-                    response_serializer=chat__service__pb2.MessageEvent.SerializeToString,
-            ),
-            'PostMessage': grpc.unary_unary_rpc_method_handler(
-                    servicer.PostMessage,
-                    request_deserializer=chat__service__pb2.PostRequest.FromString,
-                    response_serializer=chat__service__pb2.StatusResponse.SerializeToString,
-            ),
-            'GetMessages': grpc.unary_unary_rpc_method_handler(
-                    servicer.GetMessages,
-                    request_deserializer=chat__service__pb2.GetRequest.FromString,
-                    response_serializer=chat__service__pb2.GetResponse.SerializeToString,
-            ),
-            'SendDirectMessage': grpc.unary_unary_rpc_method_handler(
-                    servicer.SendDirectMessage,
-                    request_deserializer=chat__service__pb2.DirectMessageRequest.FromString,
-                    response_serializer=chat__service__pb2.StatusResponse.SerializeToString,
-            ),
-            'GetDirectMessages': grpc.unary_unary_rpc_method_handler(
-                    servicer.GetDirectMessages,
-                    request_deserializer=chat__service__pb2.GetDirectMessagesRequest.FromString,
-                    response_serializer=chat__service__pb2.DirectMessageResponse.SerializeToString,
-            ),
-            'ListConversations': grpc.unary_unary_rpc_method_handler(
-                    servicer.ListConversations,
-                    request_deserializer=chat__service__pb2.ListConversationsRequest.FromString,
-                    response_serializer=chat__service__pb2.ConversationsResponse.SerializeToString,
+                    request_deserializer=raft__node__pb2.LogoutRequest.FromString,
+                    response_serializer=raft__node__pb2.StatusResponse.SerializeToString,
             ),
             'CreateChannel': grpc.unary_unary_rpc_method_handler(
                     servicer.CreateChannel,
-                    request_deserializer=chat__service__pb2.CreateChannelRequest.FromString,
-                    response_serializer=chat__service__pb2.StatusResponse.SerializeToString,
-            ),
-            'JoinChannel': grpc.unary_unary_rpc_method_handler(
-                    servicer.JoinChannel,
-                    request_deserializer=chat__service__pb2.JoinChannelRequest.FromString,
-                    response_serializer=chat__service__pb2.StatusResponse.SerializeToString,
-            ),
-            'LeaveChannel': grpc.unary_unary_rpc_method_handler(
-                    servicer.LeaveChannel,
-                    request_deserializer=chat__service__pb2.LeaveChannelRequest.FromString,
-                    response_serializer=chat__service__pb2.StatusResponse.SerializeToString,
+                    request_deserializer=raft__node__pb2.CreateChannelRequest.FromString,
+                    response_serializer=raft__node__pb2.StatusResponse.SerializeToString,
             ),
             'GetChannels': grpc.unary_unary_rpc_method_handler(
                     servicer.GetChannels,
-                    request_deserializer=chat__service__pb2.GetChannelsRequest.FromString,
-                    response_serializer=chat__service__pb2.ChannelListResponse.SerializeToString,
+                    request_deserializer=raft__node__pb2.GetChannelsRequest.FromString,
+                    response_serializer=raft__node__pb2.ChannelListResponse.SerializeToString,
+            ),
+            'JoinChannel': grpc.unary_unary_rpc_method_handler(
+                    servicer.JoinChannel,
+                    request_deserializer=raft__node__pb2.JoinChannelRequest.FromString,
+                    response_serializer=raft__node__pb2.StatusResponse.SerializeToString,
+            ),
+            'SendMessage': grpc.unary_unary_rpc_method_handler(
+                    servicer.SendMessage,
+                    request_deserializer=raft__node__pb2.SendMessageRequest.FromString,
+                    response_serializer=raft__node__pb2.StatusResponse.SerializeToString,
+            ),
+            'GetMessages': grpc.unary_unary_rpc_method_handler(
+                    servicer.GetMessages,
+                    request_deserializer=raft__node__pb2.GetMessagesRequest.FromString,
+                    response_serializer=raft__node__pb2.MessageListResponse.SerializeToString,
+            ),
+            'SendDirectMessage': grpc.unary_unary_rpc_method_handler(
+                    servicer.SendDirectMessage,
+                    request_deserializer=raft__node__pb2.DirectMessageRequest.FromString,
+                    response_serializer=raft__node__pb2.StatusResponse.SerializeToString,
+            ),
+            'GetDirectMessages': grpc.unary_unary_rpc_method_handler(
+                    servicer.GetDirectMessages,
+                    request_deserializer=raft__node__pb2.GetDirectMessagesRequest.FromString,
+                    response_serializer=raft__node__pb2.DirectMessageListResponse.SerializeToString,
             ),
             'GetOnlineUsers': grpc.unary_unary_rpc_method_handler(
                     servicer.GetOnlineUsers,
-                    request_deserializer=chat__service__pb2.GetOnlineUsersRequest.FromString,
-                    response_serializer=chat__service__pb2.UserListResponse.SerializeToString,
+                    request_deserializer=raft__node__pb2.GetOnlineUsersRequest.FromString,
+                    response_serializer=raft__node__pb2.UserListResponse.SerializeToString,
             ),
-            'UpdatePresence': grpc.unary_unary_rpc_method_handler(
-                    servicer.UpdatePresence,
-                    request_deserializer=chat__service__pb2.UpdatePresenceRequest.FromString,
-                    response_serializer=chat__service__pb2.StatusResponse.SerializeToString,
+            'ListConversations': grpc.unary_unary_rpc_method_handler(
+                    servicer.ListConversations,
+                    request_deserializer=raft__node__pb2.ListConversationsRequest.FromString,
+                    response_serializer=raft__node__pb2.ConversationsResponse.SerializeToString,
             ),
             'UploadFile': grpc.unary_unary_rpc_method_handler(
                     servicer.UploadFile,
-                    request_deserializer=chat__service__pb2.FileUploadRequest.FromString,
-                    response_serializer=chat__service__pb2.FileUploadResponse.SerializeToString,
+                    request_deserializer=raft__node__pb2.FileUploadRequest.FromString,
+                    response_serializer=raft__node__pb2.FileUploadResponse.SerializeToString,
             ),
             'DownloadFile': grpc.unary_unary_rpc_method_handler(
                     servicer.DownloadFile,
-                    request_deserializer=chat__service__pb2.FileDownloadRequest.FromString,
-                    response_serializer=chat__service__pb2.FileResponse.SerializeToString,
+                    request_deserializer=raft__node__pb2.FileDownloadRequest.FromString,
+                    response_serializer=raft__node__pb2.FileDownloadResponse.SerializeToString,
             ),
             'ListFiles': grpc.unary_unary_rpc_method_handler(
                     servicer.ListFiles,
-                    request_deserializer=chat__service__pb2.ListFilesRequest.FromString,
-                    response_serializer=chat__service__pb2.FileListResponse.SerializeToString,
+                    request_deserializer=raft__node__pb2.ListFilesRequest.FromString,
+                    response_serializer=raft__node__pb2.FileListResponse.SerializeToString,
             ),
-            'ManageUser': grpc.unary_unary_rpc_method_handler(
-                    servicer.ManageUser,
-                    request_deserializer=chat__service__pb2.ManageUserRequest.FromString,
-                    response_serializer=chat__service__pb2.StatusResponse.SerializeToString,
+            'GetSmartReply': grpc.unary_unary_rpc_method_handler(
+                    servicer.GetSmartReply,
+                    request_deserializer=raft__node__pb2.SmartReplyRequest.FromString,
+                    response_serializer=raft__node__pb2.SmartReplyResponse.SerializeToString,
             ),
-            'ManageChannel': grpc.unary_unary_rpc_method_handler(
-                    servicer.ManageChannel,
-                    request_deserializer=chat__service__pb2.ManageChannelRequest.FromString,
-                    response_serializer=chat__service__pb2.StatusResponse.SerializeToString,
+            'SummarizeConversation': grpc.unary_unary_rpc_method_handler(
+                    servicer.SummarizeConversation,
+                    request_deserializer=raft__node__pb2.SummarizeRequest.FromString,
+                    response_serializer=raft__node__pb2.SummarizeResponse.SerializeToString,
             ),
-            'GetServerInfo': grpc.unary_unary_rpc_method_handler(
-                    servicer.GetServerInfo,
-                    request_deserializer=chat__service__pb2.ServerInfoRequest.FromString,
-                    response_serializer=chat__service__pb2.ServerInfoResponse.SerializeToString,
+            'GetLLMAnswer': grpc.unary_unary_rpc_method_handler(
+                    servicer.GetLLMAnswer,
+                    request_deserializer=raft__node__pb2.LLMRequest.FromString,
+                    response_serializer=raft__node__pb2.LLMResponse.SerializeToString,
             ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
-            'chat.ChatService', rpc_method_handlers)
+            'raft.RaftNode', rpc_method_handlers)
     server.add_generic_rpc_handlers((generic_handler,))
-    server.add_registered_method_handlers('chat.ChatService', rpc_method_handlers)
+    server.add_registered_method_handlers('raft.RaftNode', rpc_method_handlers)
 
 
  # This class is part of an EXPERIMENTAL API.
-class ChatService(object):
+class RaftNode(object):
     """Missing associated documentation comment in .proto file."""
 
     @staticmethod
-    def Login(request,
+    def RequestVote(request,
             target,
             options=(),
             channel_credentials=None,
@@ -412,9 +410,63 @@ class ChatService(object):
         return grpc.experimental.unary_unary(
             request,
             target,
-            '/chat.ChatService/Login',
-            chat__service__pb2.LoginRequest.SerializeToString,
-            chat__service__pb2.LoginResponse.FromString,
+            '/raft.RaftNode/RequestVote',
+            raft__node__pb2.VoteRequest.SerializeToString,
+            raft__node__pb2.VoteResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def AppendEntries(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/raft.RaftNode/AppendEntries',
+            raft__node__pb2.AppendEntriesRequest.SerializeToString,
+            raft__node__pb2.AppendEntriesResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def GetLeaderInfo(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/raft.RaftNode/GetLeaderInfo',
+            raft__node__pb2.GetLeaderRequest.SerializeToString,
+            raft__node__pb2.GetLeaderResponse.FromString,
             options,
             channel_credentials,
             insecure,
@@ -439,9 +491,36 @@ class ChatService(object):
         return grpc.experimental.unary_unary(
             request,
             target,
-            '/chat.ChatService/Signup',
-            chat__service__pb2.SignupRequest.SerializeToString,
-            chat__service__pb2.SignupResponse.FromString,
+            '/raft.RaftNode/Signup',
+            raft__node__pb2.SignupRequest.SerializeToString,
+            raft__node__pb2.SignupResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def Login(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/raft.RaftNode/Login',
+            raft__node__pb2.LoginRequest.SerializeToString,
+            raft__node__pb2.LoginResponse.FromString,
             options,
             channel_credentials,
             insecure,
@@ -466,171 +545,9 @@ class ChatService(object):
         return grpc.experimental.unary_unary(
             request,
             target,
-            '/chat.ChatService/Logout',
-            chat__service__pb2.LogoutRequest.SerializeToString,
-            chat__service__pb2.StatusResponse.FromString,
-            options,
-            channel_credentials,
-            insecure,
-            call_credentials,
-            compression,
-            wait_for_ready,
-            timeout,
-            metadata,
-            _registered_method=True)
-
-    @staticmethod
-    def StreamMessages(request,
-            target,
-            options=(),
-            channel_credentials=None,
-            call_credentials=None,
-            insecure=False,
-            compression=None,
-            wait_for_ready=None,
-            timeout=None,
-            metadata=None):
-        return grpc.experimental.unary_stream(
-            request,
-            target,
-            '/chat.ChatService/StreamMessages',
-            chat__service__pb2.StreamRequest.SerializeToString,
-            chat__service__pb2.MessageEvent.FromString,
-            options,
-            channel_credentials,
-            insecure,
-            call_credentials,
-            compression,
-            wait_for_ready,
-            timeout,
-            metadata,
-            _registered_method=True)
-
-    @staticmethod
-    def PostMessage(request,
-            target,
-            options=(),
-            channel_credentials=None,
-            call_credentials=None,
-            insecure=False,
-            compression=None,
-            wait_for_ready=None,
-            timeout=None,
-            metadata=None):
-        return grpc.experimental.unary_unary(
-            request,
-            target,
-            '/chat.ChatService/PostMessage',
-            chat__service__pb2.PostRequest.SerializeToString,
-            chat__service__pb2.StatusResponse.FromString,
-            options,
-            channel_credentials,
-            insecure,
-            call_credentials,
-            compression,
-            wait_for_ready,
-            timeout,
-            metadata,
-            _registered_method=True)
-
-    @staticmethod
-    def GetMessages(request,
-            target,
-            options=(),
-            channel_credentials=None,
-            call_credentials=None,
-            insecure=False,
-            compression=None,
-            wait_for_ready=None,
-            timeout=None,
-            metadata=None):
-        return grpc.experimental.unary_unary(
-            request,
-            target,
-            '/chat.ChatService/GetMessages',
-            chat__service__pb2.GetRequest.SerializeToString,
-            chat__service__pb2.GetResponse.FromString,
-            options,
-            channel_credentials,
-            insecure,
-            call_credentials,
-            compression,
-            wait_for_ready,
-            timeout,
-            metadata,
-            _registered_method=True)
-
-    @staticmethod
-    def SendDirectMessage(request,
-            target,
-            options=(),
-            channel_credentials=None,
-            call_credentials=None,
-            insecure=False,
-            compression=None,
-            wait_for_ready=None,
-            timeout=None,
-            metadata=None):
-        return grpc.experimental.unary_unary(
-            request,
-            target,
-            '/chat.ChatService/SendDirectMessage',
-            chat__service__pb2.DirectMessageRequest.SerializeToString,
-            chat__service__pb2.StatusResponse.FromString,
-            options,
-            channel_credentials,
-            insecure,
-            call_credentials,
-            compression,
-            wait_for_ready,
-            timeout,
-            metadata,
-            _registered_method=True)
-
-    @staticmethod
-    def GetDirectMessages(request,
-            target,
-            options=(),
-            channel_credentials=None,
-            call_credentials=None,
-            insecure=False,
-            compression=None,
-            wait_for_ready=None,
-            timeout=None,
-            metadata=None):
-        return grpc.experimental.unary_unary(
-            request,
-            target,
-            '/chat.ChatService/GetDirectMessages',
-            chat__service__pb2.GetDirectMessagesRequest.SerializeToString,
-            chat__service__pb2.DirectMessageResponse.FromString,
-            options,
-            channel_credentials,
-            insecure,
-            call_credentials,
-            compression,
-            wait_for_ready,
-            timeout,
-            metadata,
-            _registered_method=True)
-
-    @staticmethod
-    def ListConversations(request,
-            target,
-            options=(),
-            channel_credentials=None,
-            call_credentials=None,
-            insecure=False,
-            compression=None,
-            wait_for_ready=None,
-            timeout=None,
-            metadata=None):
-        return grpc.experimental.unary_unary(
-            request,
-            target,
-            '/chat.ChatService/ListConversations',
-            chat__service__pb2.ListConversationsRequest.SerializeToString,
-            chat__service__pb2.ConversationsResponse.FromString,
+            '/raft.RaftNode/Logout',
+            raft__node__pb2.LogoutRequest.SerializeToString,
+            raft__node__pb2.StatusResponse.FromString,
             options,
             channel_credentials,
             insecure,
@@ -655,63 +572,9 @@ class ChatService(object):
         return grpc.experimental.unary_unary(
             request,
             target,
-            '/chat.ChatService/CreateChannel',
-            chat__service__pb2.CreateChannelRequest.SerializeToString,
-            chat__service__pb2.StatusResponse.FromString,
-            options,
-            channel_credentials,
-            insecure,
-            call_credentials,
-            compression,
-            wait_for_ready,
-            timeout,
-            metadata,
-            _registered_method=True)
-
-    @staticmethod
-    def JoinChannel(request,
-            target,
-            options=(),
-            channel_credentials=None,
-            call_credentials=None,
-            insecure=False,
-            compression=None,
-            wait_for_ready=None,
-            timeout=None,
-            metadata=None):
-        return grpc.experimental.unary_unary(
-            request,
-            target,
-            '/chat.ChatService/JoinChannel',
-            chat__service__pb2.JoinChannelRequest.SerializeToString,
-            chat__service__pb2.StatusResponse.FromString,
-            options,
-            channel_credentials,
-            insecure,
-            call_credentials,
-            compression,
-            wait_for_ready,
-            timeout,
-            metadata,
-            _registered_method=True)
-
-    @staticmethod
-    def LeaveChannel(request,
-            target,
-            options=(),
-            channel_credentials=None,
-            call_credentials=None,
-            insecure=False,
-            compression=None,
-            wait_for_ready=None,
-            timeout=None,
-            metadata=None):
-        return grpc.experimental.unary_unary(
-            request,
-            target,
-            '/chat.ChatService/LeaveChannel',
-            chat__service__pb2.LeaveChannelRequest.SerializeToString,
-            chat__service__pb2.StatusResponse.FromString,
+            '/raft.RaftNode/CreateChannel',
+            raft__node__pb2.CreateChannelRequest.SerializeToString,
+            raft__node__pb2.StatusResponse.FromString,
             options,
             channel_credentials,
             insecure,
@@ -736,9 +599,144 @@ class ChatService(object):
         return grpc.experimental.unary_unary(
             request,
             target,
-            '/chat.ChatService/GetChannels',
-            chat__service__pb2.GetChannelsRequest.SerializeToString,
-            chat__service__pb2.ChannelListResponse.FromString,
+            '/raft.RaftNode/GetChannels',
+            raft__node__pb2.GetChannelsRequest.SerializeToString,
+            raft__node__pb2.ChannelListResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def JoinChannel(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/raft.RaftNode/JoinChannel',
+            raft__node__pb2.JoinChannelRequest.SerializeToString,
+            raft__node__pb2.StatusResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def SendMessage(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/raft.RaftNode/SendMessage',
+            raft__node__pb2.SendMessageRequest.SerializeToString,
+            raft__node__pb2.StatusResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def GetMessages(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/raft.RaftNode/GetMessages',
+            raft__node__pb2.GetMessagesRequest.SerializeToString,
+            raft__node__pb2.MessageListResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def SendDirectMessage(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/raft.RaftNode/SendDirectMessage',
+            raft__node__pb2.DirectMessageRequest.SerializeToString,
+            raft__node__pb2.StatusResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def GetDirectMessages(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/raft.RaftNode/GetDirectMessages',
+            raft__node__pb2.GetDirectMessagesRequest.SerializeToString,
+            raft__node__pb2.DirectMessageListResponse.FromString,
             options,
             channel_credentials,
             insecure,
@@ -763,9 +761,9 @@ class ChatService(object):
         return grpc.experimental.unary_unary(
             request,
             target,
-            '/chat.ChatService/GetOnlineUsers',
-            chat__service__pb2.GetOnlineUsersRequest.SerializeToString,
-            chat__service__pb2.UserListResponse.FromString,
+            '/raft.RaftNode/GetOnlineUsers',
+            raft__node__pb2.GetOnlineUsersRequest.SerializeToString,
+            raft__node__pb2.UserListResponse.FromString,
             options,
             channel_credentials,
             insecure,
@@ -777,7 +775,7 @@ class ChatService(object):
             _registered_method=True)
 
     @staticmethod
-    def UpdatePresence(request,
+    def ListConversations(request,
             target,
             options=(),
             channel_credentials=None,
@@ -790,9 +788,9 @@ class ChatService(object):
         return grpc.experimental.unary_unary(
             request,
             target,
-            '/chat.ChatService/UpdatePresence',
-            chat__service__pb2.UpdatePresenceRequest.SerializeToString,
-            chat__service__pb2.StatusResponse.FromString,
+            '/raft.RaftNode/ListConversations',
+            raft__node__pb2.ListConversationsRequest.SerializeToString,
+            raft__node__pb2.ConversationsResponse.FromString,
             options,
             channel_credentials,
             insecure,
@@ -817,9 +815,9 @@ class ChatService(object):
         return grpc.experimental.unary_unary(
             request,
             target,
-            '/chat.ChatService/UploadFile',
-            chat__service__pb2.FileUploadRequest.SerializeToString,
-            chat__service__pb2.FileUploadResponse.FromString,
+            '/raft.RaftNode/UploadFile',
+            raft__node__pb2.FileUploadRequest.SerializeToString,
+            raft__node__pb2.FileUploadResponse.FromString,
             options,
             channel_credentials,
             insecure,
@@ -844,9 +842,9 @@ class ChatService(object):
         return grpc.experimental.unary_unary(
             request,
             target,
-            '/chat.ChatService/DownloadFile',
-            chat__service__pb2.FileDownloadRequest.SerializeToString,
-            chat__service__pb2.FileResponse.FromString,
+            '/raft.RaftNode/DownloadFile',
+            raft__node__pb2.FileDownloadRequest.SerializeToString,
+            raft__node__pb2.FileDownloadResponse.FromString,
             options,
             channel_credentials,
             insecure,
@@ -871,9 +869,9 @@ class ChatService(object):
         return grpc.experimental.unary_unary(
             request,
             target,
-            '/chat.ChatService/ListFiles',
-            chat__service__pb2.ListFilesRequest.SerializeToString,
-            chat__service__pb2.FileListResponse.FromString,
+            '/raft.RaftNode/ListFiles',
+            raft__node__pb2.ListFilesRequest.SerializeToString,
+            raft__node__pb2.FileListResponse.FromString,
             options,
             channel_credentials,
             insecure,
@@ -885,7 +883,7 @@ class ChatService(object):
             _registered_method=True)
 
     @staticmethod
-    def ManageUser(request,
+    def GetSmartReply(request,
             target,
             options=(),
             channel_credentials=None,
@@ -898,9 +896,9 @@ class ChatService(object):
         return grpc.experimental.unary_unary(
             request,
             target,
-            '/chat.ChatService/ManageUser',
-            chat__service__pb2.ManageUserRequest.SerializeToString,
-            chat__service__pb2.StatusResponse.FromString,
+            '/raft.RaftNode/GetSmartReply',
+            raft__node__pb2.SmartReplyRequest.SerializeToString,
+            raft__node__pb2.SmartReplyResponse.FromString,
             options,
             channel_credentials,
             insecure,
@@ -912,7 +910,7 @@ class ChatService(object):
             _registered_method=True)
 
     @staticmethod
-    def ManageChannel(request,
+    def SummarizeConversation(request,
             target,
             options=(),
             channel_credentials=None,
@@ -925,9 +923,9 @@ class ChatService(object):
         return grpc.experimental.unary_unary(
             request,
             target,
-            '/chat.ChatService/ManageChannel',
-            chat__service__pb2.ManageChannelRequest.SerializeToString,
-            chat__service__pb2.StatusResponse.FromString,
+            '/raft.RaftNode/SummarizeConversation',
+            raft__node__pb2.SummarizeRequest.SerializeToString,
+            raft__node__pb2.SummarizeResponse.FromString,
             options,
             channel_credentials,
             insecure,
@@ -939,7 +937,7 @@ class ChatService(object):
             _registered_method=True)
 
     @staticmethod
-    def GetServerInfo(request,
+    def GetLLMAnswer(request,
             target,
             options=(),
             channel_credentials=None,
@@ -952,9 +950,9 @@ class ChatService(object):
         return grpc.experimental.unary_unary(
             request,
             target,
-            '/chat.ChatService/GetServerInfo',
-            chat__service__pb2.ServerInfoRequest.SerializeToString,
-            chat__service__pb2.ServerInfoResponse.FromString,
+            '/raft.RaftNode/GetLLMAnswer',
+            raft__node__pb2.LLMRequest.SerializeToString,
+            raft__node__pb2.LLMResponse.FromString,
             options,
             channel_credentials,
             insecure,
