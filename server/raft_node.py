@@ -98,6 +98,15 @@ class RaftNode(raft_node_pb2_grpc.RaftNodeServicer):
         # NEW: Persistence
         self.data_dir = f"raft_node_{node_id}_data"
         os.makedirs(self.data_dir, exist_ok=True)
+        
+        # NEW: Raft log persistence
+        self.raft_log_file = os.path.join(self.data_dir, f"raft_log_port_{port}.pkl")
+        self.raft_state_file = os.path.join(self.data_dir, f"raft_state_port_{port}.pkl")
+        
+        # Load persisted Raft state FIRST (before loading app data)
+        self._load_raft_state()
+        
+        # Then load application data
         self._load_persisted_data()
         
         # NEW: LLM connection
@@ -123,17 +132,86 @@ class RaftNode(raft_node_pb2_grpc.RaftNodeServicer):
         time.sleep(random.uniform(0.5, 1.5))
         
         logger.info(f"Node {node_id} initialized with ALL FEATURES")
-        logger.info(f"  ✓ Raft Consensus")
+        logger.info(f"  ✓ Raft Consensus (Log: {len(self.log)} entries, Term: {self.current_term})")
         logger.info(f"  ✓ User Auth (Signup/Login)")
         logger.info(f"  ✓ Channels & Messages")
         logger.info(f"  ✓ Direct Messages")
         logger.info(f"  ✓ File Upload/Download")
         logger.info(f"  ✓ Real-time Streaming")
-        logger.info(f"  ✓ Data Persistence")
+        logger.info(f"  ✓ Data Persistence + Raft Log Recovery")
         if self.llm_stub:
             logger.info(f"  ✓ LLM Features (Smart Reply, Summarize)")
         logger.info(f"Peers: {list(peers.keys())}")
     
+    def _load_raft_state(self):
+        """Load Raft log and state from disk"""
+        try:
+            # Load Raft state (term, voted_for, commit_index)
+            if os.path.exists(self.raft_state_file):
+                with open(self.raft_state_file, 'rb') as f:
+                    state = pickle.load(f)
+                    self.current_term = state.get('current_term', 0)
+                    self.voted_for = state.get('voted_for', None)
+                    self.commit_index = state.get('commit_index', -1)
+                    self.last_applied = state.get('last_applied', -1)
+                logger.info(f"✅ Recovered Raft state: Term={self.current_term}, CommitIndex={self.commit_index}")
+            
+            # Load Raft log
+            if os.path.exists(self.raft_log_file):
+                with open(self.raft_log_file, 'rb') as f:
+                    log_data = pickle.load(f)
+                    # Reconstruct LogEntry objects
+                    self.log = []
+                    for entry_dict in log_data:
+                        entry = raft_node_pb2.LogEntry(
+                            term=entry_dict['term'],
+                            command=entry_dict['command'],
+                            data=entry_dict['data']
+                        )
+                        self.log.append(entry)
+                logger.info(f"✅ Recovered {len(self.log)} log entries from disk")
+                
+                # Replay committed entries to rebuild application state
+                if self.last_applied < self.commit_index:
+                    logger.info(f"♻️  Replaying {self.commit_index - self.last_applied} committed entries...")
+                    self._apply_committed_entries()
+        except Exception as e:
+            logger.error(f"Error loading Raft state: {e}")
+            logger.info("Starting with fresh Raft state")
+    
+    def _save_raft_state(self):
+        """Persist Raft state to disk"""
+        try:
+            state = {
+                'current_term': self.current_term,
+                'voted_for': self.voted_for,
+                'commit_index': self.commit_index,
+                'last_applied': self.last_applied
+            }
+            with open(self.raft_state_file, 'wb') as f:
+                pickle.dump(state, f)
+            logger.debug(f"💾 Saved Raft state: Term={self.current_term}")
+        except Exception as e:
+            logger.error(f"Error saving Raft state: {e}")
+    
+    def _save_raft_log(self):
+        """Persist Raft log to disk"""
+        try:
+            # Convert LogEntry objects to dicts for serialization
+            log_data = []
+            for entry in self.log:
+                log_data.append({
+                    'term': entry.term,
+                    'command': entry.command,
+                    'data': entry.data
+                })
+            
+            with open(self.raft_log_file, 'wb') as f:
+                pickle.dump(log_data, f)
+            logger.debug(f"💾 Saved Raft log: {len(self.log)} entries")
+        except Exception as e:
+            logger.error(f"Error saving Raft log: {e}")
+
     def _load_persisted_data(self):
         """Load persisted data from disk"""
         try:
@@ -284,6 +362,9 @@ class RaftNode(raft_node_pb2_grpc.RaftNodeServicer):
             self.current_term += 1
             self.voted_for = self.node_id
             self._reset_election_timer()
+            
+            # 💾 SAVE STATE: Persist term and vote
+            self._save_raft_state()
             
             term = self.current_term
             last_log_index = len(self.log) - 1
@@ -521,6 +602,9 @@ class RaftNode(raft_node_pb2_grpc.RaftNodeServicer):
                 self.state = NodeState.FOLLOWER
                 self.voted_for = None
                 self.current_leader_id = None
+                
+                # 💾 SAVE STATE: Persist new term
+                self._save_raft_state()
             
             vote_granted = False
             
@@ -534,7 +618,11 @@ class RaftNode(raft_node_pb2_grpc.RaftNodeServicer):
                 if log_ok:
                     vote_granted = True
                     self.voted_for = request.candidate_id
-                    self._reset_election_timer()  # FIXED: Reset timer when granting vote
+                    self._reset_election_timer()
+                    
+                    # 💾 SAVE STATE: Persist vote
+                    self._save_raft_state()
+                    
                     logger.info(f"Node {self.node_id}: ✅ GRANTED vote to node {request.candidate_id} for term {request.term}")
                 else:
                     logger.info(f"Node {self.node_id}: ❌ Rejecting vote - log not up-to-date")
@@ -563,6 +651,9 @@ class RaftNode(raft_node_pb2_grpc.RaftNodeServicer):
                     logger.info(f"Node {self.node_id}: 📈 Higher term {request.term} from leader node {request.leader_id}, updating")
                     self.current_term = request.term
                     self.voted_for = None
+                    
+                    # 💾 SAVE STATE: Persist new term
+                    self._save_raft_state()
                 
                 # Update leader info
                 if self.current_leader_id != request.leader_id:
@@ -592,18 +683,23 @@ class RaftNode(raft_node_pb2_grpc.RaftNodeServicer):
                     insert_index = request.prev_log_index + 1
                     self.log = self.log[:insert_index] + list(request.entries)
                     logger.debug(f"Node {self.node_id}: Appended {len(request.entries)} entries")
+                    
+                    # 💾 SAVE LOG: Persist new entries
+                    self._save_raft_log()
                 
                 # Update commit index
                 if request.leader_commit > self.commit_index:
                     self.commit_index = min(request.leader_commit, len(self.log) - 1)
+                    
+                    # 💾 SAVE STATE: Persist commit index
+                    self._save_raft_state()
+                    
                     self._apply_committed_entries()
             
             return raft_node_pb2.AppendEntriesResponse(
                 term=self.current_term,
                 success=success
             )
-    
-    # Add replication helper after _apply_committed_entries
     
     def _replicate_state_change(self, command: str, data: dict) -> bool:
         """Replicate state change through Raft log"""
@@ -621,6 +717,10 @@ class RaftNode(raft_node_pb2_grpc.RaftNodeServicer):
             with self.lock:
                 self.log.append(entry)
                 log_index = len(self.log) - 1
+                
+                # 💾 SAVE LOG: Persist immediately after appending
+                self._save_raft_log()
+                
                 logger.debug(f"Replicated {command} to log index {log_index}")
             
             # Wait for replication to majority (need 2 out of 3)
@@ -637,6 +737,10 @@ class RaftNode(raft_node_pb2_grpc.RaftNodeServicer):
                     
                     if replicated >= majority:
                         self.commit_index = log_index
+                        
+                        # 💾 SAVE STATE: Persist commit index
+                        self._save_raft_state()
+                        
                         self._apply_committed_entries()
                         logger.info(f"✓ {command} replicated to {replicated}/{total_nodes} nodes")
                         return True
@@ -648,6 +752,10 @@ class RaftNode(raft_node_pb2_grpc.RaftNodeServicer):
                 if self.state == NodeState.LEADER:
                     logger.warning(f"⚠️  Timeout replicating {command}, but committing locally")
                     self.commit_index = log_index
+                    
+                    # 💾 SAVE STATE: Persist commit index
+                    self._save_raft_state()
+                    
                     self._apply_committed_entries()
                     return True
             
@@ -686,7 +794,11 @@ class RaftNode(raft_node_pb2_grpc.RaftNodeServicer):
                 
             except Exception as e:
                 logger.error(f"Error applying log entry: {e}")
-    
+        
+        # 💾 SAVE STATE: Persist last_applied
+        if self.last_applied >= 0:
+            self._save_raft_state()
+
     def _apply_create_user(self, data: dict):
         """Apply user creation from log"""
         username = data['username']
@@ -1101,14 +1213,27 @@ class RaftNode(raft_node_pb2_grpc.RaftNodeServicer):
             if self.state != NodeState.LEADER:
                 return raft_node_pb2.StatusResponse(success=False, message="Not the leader")
             
-            if request.channel_id not in self.channels:
-                return raft_node_pb2.StatusResponse(success=False, message="Channel not found")
+            channel_id = request.channel_id
+            
+            if not channel_id or channel_id not in self.channels:
+                logger.warning(f"Channel not found: {channel_id}")
+                return raft_node_pb2.StatusResponse(success=False, message=f"Channel not found: {channel_id}")
+            
+            user_id = payload["user_id"]
+            
+            # Check if user is a member of the channel
+            if user_id not in self.channels[channel_id]["members"]:
+                logger.warning(f"User {payload['username']} not member of channel {self.channels[channel_id]['name']}")
+                # Auto-add them to the channel
+                self.channels[channel_id]["members"].add(user_id)
+                self._save_channels()
+                logger.info(f"Auto-added {payload['username']} to channel {self.channels[channel_id]['name']}")
             
             message = {
                 "id": str(uuid.uuid4()),
-                "sender_id": payload["user_id"],
+                "sender_id": user_id,
                 "sender_name": payload["username"],
-                "channel_id": request.channel_id,
+                "channel_id": channel_id,
                 "content": request.content,
                 "timestamp": int(time.time() * 1000)
             }
@@ -1116,6 +1241,7 @@ class RaftNode(raft_node_pb2_grpc.RaftNodeServicer):
             if not self._replicate_state_change("SEND_MESSAGE", message):
                 return raft_node_pb2.StatusResponse(success=False, message="Replication failed")
             
+            logger.info(f"Message from {payload['username']} sent to channel {self.channels[channel_id]['name']}")
             return raft_node_pb2.StatusResponse(success=True, message="Message sent")
     
     def SendDirectMessage(self, request, context):
@@ -1273,6 +1399,114 @@ class RaftNode(raft_node_pb2_grpc.RaftNodeServicer):
             return raft_node_pb2.LLMResponse(
                 success=True,
                 answer="LLM service not available"
+            )
+    
+    def AddUserToChannel(self, request, context):
+        """Add user to channel (admin only)"""
+        with self.lock:
+            payload = self._verify_token(request.token)
+            if not payload:
+                return raft_node_pb2.StatusResponse(success=False, message="Invalid token")
+            
+            if self.state != NodeState.LEADER:
+                return raft_node_pb2.StatusResponse(success=False, message="Not the leader")
+            
+            channel_id = request.channel_id
+            target_username = request.target_username
+            
+            if channel_id not in self.channels:
+                return raft_node_pb2.StatusResponse(success=False, message="Channel not found")
+            
+            if target_username not in self.users:
+                return raft_node_pb2.StatusResponse(success=False, message="User not found")
+            
+            channel = self.channels[channel_id]
+            current_user_id = payload["user_id"]
+            
+            # Check if current user is admin of this channel
+            if current_user_id not in channel["admins"]:
+                return raft_node_pb2.StatusResponse(
+                    success=False, 
+                    message="Only channel admins can add users"
+                )
+            
+            target_user_id = self.users[target_username]["id"]
+            
+            # Check if user already in channel
+            if target_user_id in channel["members"]:
+                return raft_node_pb2.StatusResponse(
+                    success=False,
+                    message=f"{target_username} is already a member"
+                )
+            
+            # Add user through replication
+            add_data = {
+                "channel_id": channel_id,
+                "user_id": target_user_id
+            }
+            
+            if not self._replicate_state_change("JOIN_CHANNEL", add_data):
+                return raft_node_pb2.StatusResponse(success=False, message="Replication failed")
+            
+            logger.info(f"Admin {payload['username']} added {target_username} to channel {channel['name']}")
+            return raft_node_pb2.StatusResponse(
+                success=True, 
+                message=f"Added {target_username} to #{channel['name']}"
+            )
+    
+    def RemoveUserFromChannel(self, request, context):
+        """Remove user from channel (admin only)"""
+        with self.lock:
+            payload = self._verify_token(request.token)
+            if not payload:
+                return raft_node_pb2.StatusResponse(success=False, message="Invalid token")
+            
+            if self.state != NodeState.LEADER:
+                return raft_node_pb2.StatusResponse(success=False, message="Not the leader")
+            
+            channel_id = request.channel_id
+            target_username = request.target_username
+            
+            if channel_id not in self.channels:
+                return raft_node_pb2.StatusResponse(success=False, message="Channel not found")
+            
+            if target_username not in self.users:
+                return raft_node_pb2.StatusResponse(success=False, message="User not found")
+            
+            channel = self.channels[channel_id]
+            current_user_id = payload["user_id"]
+            
+            # Check if current user is admin of this channel
+            if current_user_id not in channel["admins"]:
+                return raft_node_pb2.StatusResponse(
+                    success=False,
+                    message="Only channel admins can remove users"
+                )
+            
+            target_user_id = self.users[target_username]["id"]
+            
+            # Cannot remove channel admins
+            if target_user_id in channel["admins"]:
+                return raft_node_pb2.StatusResponse(
+                    success=False,
+                    message="Cannot remove channel admin"
+                )
+            
+            # Check if user is in channel
+            if target_user_id not in channel["members"]:
+                return raft_node_pb2.StatusResponse(
+                    success=False,
+                    message=f"{target_username} is not a member"
+                )
+            
+            # Remove user
+            channel["members"].discard(target_user_id)
+            self._save_channels()
+            
+            logger.info(f"Admin {payload['username']} removed {target_username} from channel {channel['name']}")
+            return raft_node_pb2.StatusResponse(
+                success=True,
+                message=f"Removed {target_username} from #{channel['name']}"
             )
 
 # ...existing serve function...

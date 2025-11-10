@@ -55,10 +55,18 @@ class ChatClient(cmd.Cmd):
         for attempt in range(5):
             for node_addr in self.cluster_nodes:
                 try:
-                    channel = grpc.insecure_channel(node_addr)
+                    # Longer timeout for initial connection (5 seconds)
+                    channel = grpc.insecure_channel(
+                        node_addr,
+                        options=[
+                            ('grpc.max_connection_idle_ms', 30000),
+                            ('grpc.max_connection_age_ms', 60000),
+                        ]
+                    )
                     stub = raft_node_pb2_grpc.RaftNodeStub(channel)
                     
-                    response = stub.GetLeaderInfo(raft_node_pb2.GetLeaderRequest(), timeout=2.0)
+                    # Increase timeout to 5 seconds
+                    response = stub.GetLeaderInfo(raft_node_pb2.GetLeaderRequest(), timeout=5.0)
                     
                     if response.is_leader:
                         print(f"✓ Found leader at {node_addr} (Node {response.leader_id}, Term {response.term})")
@@ -67,12 +75,22 @@ class ChatClient(cmd.Cmd):
                         self.server_address = node_addr
                         return True
                     elif response.leader_address and response.leader_id > 0:
-                        print(f"→ Redirecting to leader at {response.leader_address}")
+                        print(f"→ Node {node_addr} reports leader at {response.leader_address}")
+                        
+                        # Try to connect to the reported leader with longer timeout
                         try:
-                            leader_channel = grpc.insecure_channel(response.leader_address)
+                            leader_channel = grpc.insecure_channel(
+                                response.leader_address,
+                                options=[
+                                    ('grpc.max_connection_idle_ms', 30000),
+                                    ('grpc.max_connection_age_ms', 60000),
+                                ]
+                            )
                             leader_stub = raft_node_pb2_grpc.RaftNodeStub(leader_channel)
                             
-                            verify = leader_stub.GetLeaderInfo(raft_node_pb2.GetLeaderRequest(), timeout=2.0)
+                            # Verify with 5 second timeout
+                            verify = leader_stub.GetLeaderInfo(raft_node_pb2.GetLeaderRequest(), timeout=5.0)
+                            
                             if verify.is_leader:
                                 print(f"✓ Connected to leader at {response.leader_address}")
                                 self.channel = leader_channel
@@ -80,37 +98,54 @@ class ChatClient(cmd.Cmd):
                                 self.server_address = response.leader_address
                                 channel.close()
                                 return True
+                            else:
+                                print(f"  Leader changed, retrying...")
+                                leader_channel.close()
+                        except grpc.RpcError as e:
+                            print(f"  Could not reach reported leader ({e.code()}), trying next node...")
                         except Exception as e:
-                            print(f"  Failed to connect to reported leader: {e}")
+                            print(f"  Error connecting to reported leader: {str(e)[:50]}")
+                    else:
+                        print(f"  Node {node_addr}: {response.state} (waiting for leader election)")
                     
                     channel.close()
+                    
+                except grpc.RpcError as e:
+                    if e.code() != grpc.StatusCode.UNAVAILABLE:
+                        print(f"  Node {node_addr}: {e.code()}")
                 except Exception as e:
-                    continue
+                    # Silently skip unreachable nodes
+                    pass
             
             if attempt < 4:
-                print(f"⚠️  No leader found, waiting 2s before retry {attempt+1}/5...")
-                time.sleep(2)
+                print(f"⚠️  No leader found, waiting 3s before retry {attempt+1}/5...")
+                time.sleep(3)
         
         print("\n❌ Could not find Raft leader")
         print("   Make sure all 3 Raft nodes are running:")
         print("   python server/raft_node.py --node-id 1 --port 50051")
         print("   python server/raft_node.py --node-id 2 --port 50052")
         print("   python server/raft_node.py --node-id 3 --port 50053")
+        print("\n   Nodes need 3-6 seconds to elect a leader after startup.")
         sys.exit(1)
     
     def _reconnect_to_leader(self) -> bool:
         """Reconnect to current Raft leader"""
-        logger_backup = self.username  # Remember who we are
-        
         print("\n⚠️  Connection lost. Finding new leader...")
         
         for attempt in range(3):
             for node_addr in self.cluster_nodes:
                 try:
-                    test_channel = grpc.insecure_channel(node_addr)
+                    test_channel = grpc.insecure_channel(
+                        node_addr,
+                        options=[
+                            ('grpc.max_connection_idle_ms', 30000),
+                        ]
+                    )
                     test_stub = raft_node_pb2_grpc.RaftNodeStub(test_channel)
                     
-                    response = test_stub.GetLeaderInfo(raft_node_pb2.GetLeaderRequest(), timeout=2.0)
+                    # Longer timeout for reconnection (5 seconds)
+                    response = test_stub.GetLeaderInfo(raft_node_pb2.GetLeaderRequest(), timeout=5.0)
                     
                     if response.is_leader:
                         print(f"✓ Reconnected to new leader at {node_addr}")
@@ -130,8 +165,8 @@ class ChatClient(cmd.Cmd):
                     continue
             
             if attempt < 2:
-                print(f"  Retry {attempt+1}/3...")
-                time.sleep(1)
+                print(f"  Retry {attempt+1}/3... (waiting 2s)")
+                time.sleep(2)
         
         print("❌ Could not reconnect to any leader")
         return False
@@ -163,6 +198,104 @@ class ChatClient(cmd.Cmd):
         
         raise Exception("Failed after retries")
     
+    def _ensure_connected_to_leader(self) -> bool:
+        """Ensure we're connected to the current leader, reconnect if needed"""
+        try:
+            # Check if current connection is to leader (with short timeout)
+            response = self.stub.GetLeaderInfo(raft_node_pb2.GetLeaderRequest(), timeout=1.0)
+            
+            if response.is_leader:
+                return True  # Already connected to leader
+            
+            # We're connected to a follower, need to redirect to leader
+            if response.leader_address and response.leader_id > 0:
+                print(f"🔄 Redirecting to leader at {response.leader_address}...")
+                
+                # Connect to leader
+                leader_channel = grpc.insecure_channel(
+                    response.leader_address,
+                    options=[
+                        ('grpc.max_connection_idle_ms', 30000),
+                    ]
+                )
+                leader_stub = raft_node_pb2_grpc.RaftNodeStub(leader_channel)
+                
+                # Verify it's actually the leader
+                verify = leader_stub.GetLeaderInfo(raft_node_pb2.GetLeaderRequest(), timeout=2.0)
+                
+                if verify.is_leader:
+                    # Close old connection
+                    if self.channel:
+                        self.channel.close()
+                    
+                    self.channel = leader_channel
+                    self.stub = leader_stub
+                    self.server_address = response.leader_address
+                    print(f"✓ Connected to leader node {response.leader_id}")
+                    return True
+                else:
+                    leader_channel.close()
+                    print("⚠️  Leader changed, retrying...")
+                    return False
+            else:
+                print("⚠️  No leader available")
+                return False
+                
+        except grpc.RpcError as e:
+            # Current node is down or unreachable
+            if e.code() in [grpc.StatusCode.UNAVAILABLE, grpc.StatusCode.DEADLINE_EXCEEDED]:
+                print(f"⚠️  Current node {self.server_address} is unreachable")
+                return self._reconnect_to_leader()
+            return False
+        except Exception as e:
+            # Any other error - try to reconnect
+            print(f"⚠️  Connection error: {str(e)[:50]}")
+            return self._reconnect_to_leader()
+    
+    def _call_leader_with_retry(self, rpc_func, *args, **kwargs):
+        """Call RPC ensuring we're connected to leader, with retry"""
+        max_retries = 3
+        
+        for attempt in range(max_retries):
+            try:
+                # Ensure connected to leader before calling
+                if not self._ensure_connected_to_leader():
+                    if attempt < max_retries - 1:
+                        print(f"  Retry {attempt+1}/{max_retries}...")
+                        time.sleep(1)
+                        continue
+                    else:
+                        raise Exception("Could not connect to leader after 3 retries")
+                
+                # Now call the RPC (we're connected to leader)
+                return rpc_func(*args, **kwargs)
+                
+            except grpc.RpcError as e:
+                # Handle UNAVAILABLE - node is down
+                if e.code() == grpc.StatusCode.UNAVAILABLE and attempt < max_retries - 1:
+                    print(f"⚠️  Leader unavailable, finding new leader...")
+                    if self._reconnect_to_leader():
+                        continue
+                    else:
+                        time.sleep(1)
+                        continue
+                # Handle other errors
+                elif e.code() == grpc.StatusCode.UNAVAILABLE:
+                    raise Exception("❌ No available leader found. Please check if at least 2 Raft nodes are running.")
+                else:
+                    raise
+            except Exception as e:
+                error_str = str(e)
+                # Check for common connection errors
+                if attempt < max_retries - 1 and any(x in error_str for x in ["Not the leader", "UNAVAILABLE", "Connection refused", "ConnectEx"]):
+                    print(f"⚠️  Connection issue, redirecting... (attempt {attempt+1}/{max_retries})")
+                    time.sleep(0.5)
+                    # Force reconnection on next attempt
+                    continue
+                raise
+        
+        raise Exception("Failed to send message after multiple retries")
+    
     def do_signup(self, arg):
         """Create new account: signup"""
         if self.token:
@@ -189,7 +322,8 @@ class ChatClient(cmd.Cmd):
                 display_name=display_name
             )
            
-            response = self._call_with_retry(self.stub.Signup, request, timeout=5.0)
+            # Use leader-aware call for signup
+            response = self._call_leader_with_retry(self.stub.Signup, request, timeout=5.0)
             
             if response.success:
                 print(f"✓ {response.message}")
@@ -297,7 +431,8 @@ class ChatClient(cmd.Cmd):
                 description=description,
                 is_private=False
             )
-            response = self._call_with_retry(self.stub.CreateChannel, request, timeout=5.0)
+            # Use leader-aware call
+            response = self._call_leader_with_retry(self.stub.CreateChannel, request, timeout=5.0)
             
             if response.success:
                 print(f"✓ {response.message}")
@@ -329,7 +464,8 @@ class ChatClient(cmd.Cmd):
                             token=self.token,
                             channel_id=channel.channel_id
                         )
-                        join_resp = self.stub.JoinChannel(join_req)
+                        # Use leader-aware call for join
+                        join_resp = self._call_leader_with_retry(self.stub.JoinChannel, join_req, timeout=5.0)
                         
                         if join_resp.success:
                             self.current_channel = channel.channel_id
@@ -362,7 +498,8 @@ class ChatClient(cmd.Cmd):
                     recipient_username=self.dm_partner,
                     content=arg
                 )
-                response = self._call_with_retry(self.stub.SendDirectMessage, request, timeout=5.0)
+                # Use leader-aware call
+                response = self._call_leader_with_retry(self.stub.SendDirectMessage, request, timeout=5.0)
                 
                 if response.success:
                     timestamp = datetime.now().strftime("%H:%M")
@@ -371,7 +508,25 @@ class ChatClient(cmd.Cmd):
                     print(f"❌ Failed: {response.message}")
             else:
                 if not self.current_channel:
-                    print("Join a channel first or use 'dm <username>'")
+                    print("❌ No channel selected. Use 'join <channel>' first.")
+                    print("Available channels: general, random, tech")
+                    return
+                
+                # Verify channel still exists before sending
+                channels_req = raft_node_pb2.GetChannelsRequest(token=self.token)
+                channels_resp = self.stub.GetChannels(channels_req, timeout=2.0)
+                
+                channel_exists = False
+                if channels_resp.success:
+                    for channel in channels_resp.channels:
+                        if channel.channel_id == self.current_channel:
+                            channel_exists = True
+                            break
+                
+                if not channel_exists:
+                    print(f"❌ Channel #{self.current_channel_name} no longer exists or you lost access.")
+                    print("   Rejoining general channel...")
+                    self._join_default_channel()
                     return
                 
                 request = raft_node_pb2.SendMessageRequest(
@@ -379,16 +534,27 @@ class ChatClient(cmd.Cmd):
                     channel_id=self.current_channel,
                     content=arg
                 )
-                response = self._call_with_retry(self.stub.SendMessage, request, timeout=5.0)
+                # Use leader-aware call
+                response = self._call_leader_with_retry(self.stub.SendMessage, request, timeout=5.0)
                 
                 if response.success:
                     timestamp = datetime.now().strftime("%H:%M")
-                    print(f"[{timestamp}] You: {arg}")
+                    print(f"[{timestamp}] You → #{self.current_channel_name}: {arg}")
                 else:
                     print(f"❌ Failed: {response.message}")
+                    if "not found" in response.message.lower():
+                        print("   Try rejoining the channel: join general")
+                        
+        except grpc.RpcError as e:
+            if e.code() == grpc.StatusCode.NOT_FOUND:
+                print(f"❌ Channel not found. Rejoining general...")
+                self._join_default_channel()
+            else:
+                print(f"Error: {e.details() if hasattr(e, 'details') else str(e)}")
+                print("Tip: Try 'status' to check cluster health")
         except Exception as e:
             print(f"Error: {e}")
-            print("Tip: Try 'status' to check cluster health")
+            print("Tip: Try 'status' to check cluster health or 'join general' to rejoin")
     
     def do_dm(self, arg):
         """Start DM conversation: dm <username>"""
@@ -517,6 +683,26 @@ class ChatClient(cmd.Cmd):
         except Exception as e:
             print(f"Error: {e}")
     
+    def do_reconnect(self, arg):
+        """Force reconnect to current leader"""
+        print("🔄 Forcing reconnection...")
+        
+        # Close current connection
+        if self.channel:
+            try:
+                self.channel.close()
+            except:
+                pass
+        
+        # Try to find and connect to leader
+        if self._reconnect_to_leader():
+            print(f"✓ Successfully reconnected to {self.server_address}")
+            
+            # Show cluster status after reconnection
+            self.do_status("")
+        else:
+            print("❌ Failed to reconnect. Please check if at least 2 nodes are running.")
+    
     def do_status(self, arg):
         """Show Raft cluster status"""
         print("\n🖥️  Raft Cluster Status")
@@ -525,6 +711,20 @@ class ChatClient(cmd.Cmd):
         print(f"Username: {self.username or 'Not logged in'}")
         if self.current_channel_name:
             print(f"Current channel: #{self.current_channel_name}")
+        
+        # Check if current connection is alive
+        try:
+            response = self.stub.GetLeaderInfo(raft_node_pb2.GetLeaderRequest(), timeout=1.0)
+            if response.is_leader:
+                print(f"Status: ✅ Connected to LEADER")
+            else:
+                print(f"Status: ⚠️  Connected to {response.state.upper()} (not leader)")
+                if response.leader_address:
+                    print(f"         Current leader is at: {response.leader_address}")
+        except Exception as e:
+            print(f"Status: ❌ UNREACHABLE - {str(e)[:60]}")
+            print(f"        Tip: Use 'reconnect' to find the current leader")
+        
         print(f"\nCluster nodes:")
         
         for node_addr in self.cluster_nodes:
@@ -539,9 +739,17 @@ class ChatClient(cmd.Cmd):
                 
                 channel.close()
             except:
-                print(f"   {node_addr}: UNREACHABLE")
+                unreachable_marker = "✗" if node_addr == self.server_address else " "
+                print(f" {unreachable_marker} {node_addr}: UNREACHABLE")
         
         print("=" * 60)
+        
+        # Auto-suggest reconnection if connected to unreachable node
+        if self.server_address:
+            try:
+                self.stub.GetLeaderInfo(raft_node_pb2.GetLeaderRequest(), timeout=0.5)
+            except:
+                print("\n⚠️  Your connection is DEAD. Type 'reconnect' to find the current leader.")
     
     def do_clear(self, arg):
         """Clear the screen"""
@@ -628,8 +836,12 @@ class ChatClient(cmd.Cmd):
             response = self.stub.DownloadFile(request, timeout=30.0)
             
             if response.success:
+                # Create downloads folder with username
+                download_dir = os.path.join("downloads", self.username)
+                os.makedirs(download_dir, exist_ok=True)
+                
                 filename = save_as or response.file_name
-                filepath = os.path.join(".", filename)
+                filepath = os.path.join(download_dir, filename)
                 
                 with open(filepath, 'wb') as f:
                     f.write(response.file_data)
@@ -768,6 +980,139 @@ class ChatClient(cmd.Cmd):
         except Exception as e:
             print(f"Error: {e}")
     
+    def do_add_user(self, arg):
+        """Add user to current channel (admin only): add_user <username>"""
+        if not self.token:
+            print("Please login first")
+            return
+        
+        if not self.current_channel:
+            print("❌ Join a channel first")
+            return
+        
+        if not arg:
+            print("Usage: add_user <username>")
+            return
+        
+        username = arg.strip()
+        
+        try:
+            request = raft_node_pb2.ChannelAdminRequest(
+                token=self.token,
+                channel_id=self.current_channel,
+                target_username=username
+            )
+            
+            response = self._call_leader_with_retry(self.stub.AddUserToChannel, request, timeout=5.0)
+            
+            if response.success:
+                print(f"✓ {response.message}")
+            else:
+                print(f"❌ Failed: {response.message}")
+                
+        except Exception as e:
+            print(f"Error: {e}")
+    
+    def do_remove_user(self, arg):
+        """Remove user from current channel (admin only): remove_user <username>"""
+        if not self.token:
+            print("Please login first")
+            return
+        
+        if not self.current_channel:
+            print("❌ Join a channel first")
+            return
+        
+        if not arg:
+            print("Usage: remove_user <username>")
+            return
+        
+        username = arg.strip()
+        
+        try:
+            request = raft_node_pb2.ChannelAdminRequest(
+                token=self.token,
+                channel_id=self.current_channel,
+                target_username=username
+            )
+            
+            response = self._call_leader_with_retry(self.stub.RemoveUserFromChannel, request, timeout=5.0)
+            
+            if response.success:
+                print(f"✓ {response.message}")
+            else:
+                print(f"❌ Failed: {response.message}")
+                
+        except Exception as e:
+            print(f"Error: {e}")
+    
+    def do_help_all(self, arg):
+        """Show all available commands with categories"""
+        print("\n" + "="*60)
+        print("AUTHENTICATION COMMANDS")
+        print("="*60)
+        print("  signup                    - Create new account")
+        print("  login <username>          - Login to account")
+        print("  logout                    - Logout")
+        
+        print("\n" + "="*60)
+        print("CHANNEL COMMANDS")
+        print("="*60)
+        print("  channels                  - List all channels")
+        print("  create_channel <name> [d] - Create new channel (you become admin)")
+        print("  join <channel>            - Join a channel")
+        print("  send <message>            - Send message to current channel")
+        print("  history [limit]           - Show message history")
+        
+        print("\n" + "="*60)
+        print("CHANNEL ADMIN COMMANDS (Admins Only)")
+        print("="*60)
+        print("  add_user <username>       - Add user to current channel")
+        print("  remove_user <username>    - Remove user from current channel")
+        print("  Note: You become admin when you create a channel")
+        
+        print("\n" + "="*60)
+        print("DIRECT MESSAGE COMMANDS")
+        print("="*60)
+        print("  dm <username>             - Start DM conversation")
+        print("  conversations             - List all your DM conversations")
+        print("  send <message>            - Send DM (when in DM mode)")
+        print("  back                      - Return to channel mode")
+        
+        print("\n" + "="*60)
+        print("FILE TRANSFER COMMANDS")
+        print("="*60)
+        print("  upload <filepath> [desc]  - Upload file to channel/DM")
+        print("  download <file_id> [name] - Download file by ID")
+        print("  files                     - List files in current channel")
+        
+        print("\n" + "="*60)
+        print("USER COMMANDS")
+        print("="*60)
+        print("  users                     - Show all users (online/offline)")
+        
+        print("\n" + "="*60)
+        print("AI/LLM COMMANDS")
+        print("="*60)
+        print("  smart_reply               - Get AI reply suggestions")
+        print("  summarize [limit]         - Summarize conversation")
+        print("  ask <question>            - Ask AI a question")
+        
+        print("\n" + "="*60)
+        print("RAFT CLUSTER COMMANDS")
+        print("="*60)
+        print("  status                    - Show Raft cluster status")
+        print("  reconnect                 - Force reconnect to current leader")
+        
+        print("\n" + "="*60)
+        print("OTHER COMMANDS")
+        print("="*60)
+        print("  clear                     - Clear screen")
+        print("  help                      - Show basic help")
+        print("  help_all                  - Show this comprehensive help")
+        print("  exit                      - Exit application")
+        print("="*60 + "\n")
+    
     def do_help(self, arg):
         """Show help"""
         print("\n" + "="*60)
@@ -783,6 +1128,9 @@ class ChatClient(cmd.Cmd):
         print("  send <message>         - Send message")
         print("  history [limit]        - Show message history")
         print()
+        print("  add_user <username>    - Add user to channel (admin)")
+        print("  remove_user <username> - Remove user (admin)")
+        print()
         print("  dm <username>          - Start DM conversation")
         print("  conversations          - List all DM conversations")
         print("  back                   - Exit DM mode")
@@ -797,7 +1145,9 @@ class ChatClient(cmd.Cmd):
         print()
         print("  users                  - Show all users")
         print("  status                 - Show Raft cluster status")
+        print("  reconnect              - Force reconnect to current leader")
         print("  clear                  - Clear screen")
+        print("  help_all               - Show comprehensive help")
         print("  exit                   - Exit application")
         print("="*60 + "\n")
     
@@ -814,7 +1164,7 @@ class ChatClient(cmd.Cmd):
         """Auto-join general channel"""
         try:
             request = raft_node_pb2.GetChannelsRequest(token=self.token)
-            response = self.stub.GetChannels(request)
+            response = self.stub.GetChannels(request, timeout=3.0)
             
             if response.success:
                 for channel in response.channels:
@@ -823,15 +1173,22 @@ class ChatClient(cmd.Cmd):
                             token=self.token,
                             channel_id=channel.channel_id
                         )
-                        join_resp = self.stub.JoinChannel(join_req)
+                        join_resp = self._call_leader_with_retry(self.stub.JoinChannel, join_req, timeout=5.0)
                         
                         if join_resp.success:
                             self.current_channel = channel.channel_id
                             self.current_channel_name = "general"
-                            print(f"✓ Auto-joined #general")
-                        break
+                            print(f"✓ Joined #general")
+                            return True
+                        else:
+                            print(f"⚠️  Could not join general: {join_resp.message}")
+                            return False
+                
+                print("⚠️  General channel not found")
+                return False
         except Exception as e:
-            print(f"Could not auto-join general: {e}")
+            print(f"⚠️  Could not auto-join general: {e}")
+            return False
     
     def _show_recent_messages(self, limit: int = 10):
         """Show recent messages from channel"""
