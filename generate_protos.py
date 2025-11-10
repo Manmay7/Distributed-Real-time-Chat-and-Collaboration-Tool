@@ -4,30 +4,38 @@ import subprocess
 # Create generated directory if it doesn't exist
 os.makedirs('generated', exist_ok=True)
 
-print("Generating proto files...")
-
-# Generate raft_node proto (with all chat features)
-print("- Generating raft_node protos...")
+# Generate raft_node proto
 subprocess.run([
     'python', '-m', 'grpc_tools.protoc',
     '-I', 'protos',
     '--python_out=generated',
     '--grpc_python_out=generated',
     'protos/raft_node.proto'
-], check=True)
+])
 
-# Generate llm_service proto (if exists)
+print("✓ Generated raft_node protos")
+
+# Generate chat_client proto if it exists
+if os.path.exists('protos/chat_client.proto'):
+    subprocess.run([
+        'python', '-m', 'grpc_tools.protoc',
+        '-I', 'protos',
+        '--python_out=generated',
+        '--grpc_python_out=generated',
+        'protos/chat_client.proto'
+    ])
+    print("✓ Generated chat_client protos")
+
+# Generate LLM service proto if it exists
 if os.path.exists('protos/llm_service.proto'):
-    print("- Generating llm_service protos...")
     subprocess.run([
         'python', '-m', 'grpc_tools.protoc',
         '-I', 'protos',
         '--python_out=generated',
         '--grpc_python_out=generated',
         'protos/llm_service.proto'
-    ], check=True)
+    ])
+    print("✓ Generated llm_service protos")
 
-print("✓ Proto files generated successfully!")
-print("\nNow you can:")
-print("1. Start 3 Raft nodes (they handle ALL chat features)")
-print("2. Connect with chat_client.py directly to Raft nodes")
+print("\n✅ All proto files generated successfully!")
+print("Run: python generate_protos.py")

@@ -1,4 +1,3 @@
-
 syntax = "proto3";
 
 package raft;
@@ -38,6 +37,10 @@ service RaftNode {
   rpc GetSmartReply(SmartReplyRequest) returns (SmartReplyResponse);
   rpc SummarizeConversation(SummarizeRequest) returns (SummarizeResponse);
   rpc GetLLMAnswer(LLMRequest) returns (LLMResponse);
+  
+  // NEW: Channel admin operations
+  rpc AddUserToChannel(ChannelAdminRequest) returns (StatusResponse);
+  rpc RemoveUserFromChannel(ChannelAdminRequest) returns (StatusResponse);
 }
 
 // Raft consensus messages
@@ -317,6 +320,13 @@ message LLMRequest {
 message LLMResponse {
   bool success = 1;
   string answer = 2;
+}
+
+// NEW: Channel admin operations
+message ChannelAdminRequest {
+  string token = 1;
+  string channel_id = 2;
+  string target_username = 3;
 }
 
 // Generic status response
