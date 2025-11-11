@@ -28,6 +28,12 @@ message SmartReplyRequest {
     string user_id = 3;
 }
 
+// Renamed from ChatMessage to avoid conflicts
+message Message {
+    string sender = 1;
+    string content = 2;
+}
+
 message ChatMessage {
     string sender = 1;
     string content = 2;
@@ -53,7 +59,7 @@ message SummarizeResponse {
 
 message ContextRequest {
     string request_id = 1;
-    repeated ChatMessage context = 2;
+    repeated Message context = 2;  // Uses Message (simple version)
     string current_input = 3;
 }
 
@@ -61,4 +67,4 @@ message SuggestionsResponse {
     string request_id = 1;
     repeated string suggestions = 2;
     repeated string topics = 3;
-}	
+}

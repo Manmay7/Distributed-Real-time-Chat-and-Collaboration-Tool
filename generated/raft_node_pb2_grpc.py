@@ -79,6 +79,11 @@ class RaftNodeStub(object):
                 request_serializer=raft__node__pb2.JoinChannelRequest.SerializeToString,
                 response_deserializer=raft__node__pb2.StatusResponse.FromString,
                 _registered_method=True)
+        self.GetChannelMembers = channel.unary_unary(
+                '/raft.RaftNode/GetChannelMembers',
+                request_serializer=raft__node__pb2.GetChannelMembersRequest.SerializeToString,
+                response_deserializer=raft__node__pb2.ChannelMembersResponse.FromString,
+                _registered_method=True)
         self.SendMessage = channel.unary_unary(
                 '/raft.RaftNode/SendMessage',
                 request_serializer=raft__node__pb2.SendMessageRequest.SerializeToString,
@@ -139,6 +144,21 @@ class RaftNodeStub(object):
                 request_serializer=raft__node__pb2.LLMRequest.SerializeToString,
                 response_deserializer=raft__node__pb2.LLMResponse.FromString,
                 _registered_method=True)
+        self.GetContextSuggestions = channel.unary_unary(
+                '/raft.RaftNode/GetContextSuggestions',
+                request_serializer=raft__node__pb2.ContextSuggestionsRequest.SerializeToString,
+                response_deserializer=raft__node__pb2.ContextSuggestionsResponse.FromString,
+                _registered_method=True)
+        self.AddUserToChannel = channel.unary_unary(
+                '/raft.RaftNode/AddUserToChannel',
+                request_serializer=raft__node__pb2.ChannelAdminRequest.SerializeToString,
+                response_deserializer=raft__node__pb2.StatusResponse.FromString,
+                _registered_method=True)
+        self.RemoveUserFromChannel = channel.unary_unary(
+                '/raft.RaftNode/RemoveUserFromChannel',
+                request_serializer=raft__node__pb2.ChannelAdminRequest.SerializeToString,
+                response_deserializer=raft__node__pb2.StatusResponse.FromString,
+                _registered_method=True)
 
 
 class RaftNodeServicer(object):
@@ -197,6 +217,13 @@ class RaftNodeServicer(object):
 
     def JoinChannel(self, request, context):
         """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def GetChannelMembers(self, request, context):
+        """NEW!
+        """
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
@@ -277,6 +304,26 @@ class RaftNodeServicer(object):
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def GetContextSuggestions(self, request, context):
+        """NEW!
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def AddUserToChannel(self, request, context):
+        """NEW: Channel admin operations
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def RemoveUserFromChannel(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
 
 def add_RaftNodeServicer_to_server(servicer, server):
     rpc_method_handlers = {
@@ -324,6 +371,11 @@ def add_RaftNodeServicer_to_server(servicer, server):
                     servicer.JoinChannel,
                     request_deserializer=raft__node__pb2.JoinChannelRequest.FromString,
                     response_serializer=raft__node__pb2.StatusResponse.SerializeToString,
+            ),
+            'GetChannelMembers': grpc.unary_unary_rpc_method_handler(
+                    servicer.GetChannelMembers,
+                    request_deserializer=raft__node__pb2.GetChannelMembersRequest.FromString,
+                    response_serializer=raft__node__pb2.ChannelMembersResponse.SerializeToString,
             ),
             'SendMessage': grpc.unary_unary_rpc_method_handler(
                     servicer.SendMessage,
@@ -384,6 +436,21 @@ def add_RaftNodeServicer_to_server(servicer, server):
                     servicer.GetLLMAnswer,
                     request_deserializer=raft__node__pb2.LLMRequest.FromString,
                     response_serializer=raft__node__pb2.LLMResponse.SerializeToString,
+            ),
+            'GetContextSuggestions': grpc.unary_unary_rpc_method_handler(
+                    servicer.GetContextSuggestions,
+                    request_deserializer=raft__node__pb2.ContextSuggestionsRequest.FromString,
+                    response_serializer=raft__node__pb2.ContextSuggestionsResponse.SerializeToString,
+            ),
+            'AddUserToChannel': grpc.unary_unary_rpc_method_handler(
+                    servicer.AddUserToChannel,
+                    request_deserializer=raft__node__pb2.ChannelAdminRequest.FromString,
+                    response_serializer=raft__node__pb2.StatusResponse.SerializeToString,
+            ),
+            'RemoveUserFromChannel': grpc.unary_unary_rpc_method_handler(
+                    servicer.RemoveUserFromChannel,
+                    request_deserializer=raft__node__pb2.ChannelAdminRequest.FromString,
+                    response_serializer=raft__node__pb2.StatusResponse.SerializeToString,
             ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
@@ -629,6 +696,33 @@ class RaftNode(object):
             '/raft.RaftNode/JoinChannel',
             raft__node__pb2.JoinChannelRequest.SerializeToString,
             raft__node__pb2.StatusResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def GetChannelMembers(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/raft.RaftNode/GetChannelMembers',
+            raft__node__pb2.GetChannelMembersRequest.SerializeToString,
+            raft__node__pb2.ChannelMembersResponse.FromString,
             options,
             channel_credentials,
             insecure,
@@ -953,6 +1047,87 @@ class RaftNode(object):
             '/raft.RaftNode/GetLLMAnswer',
             raft__node__pb2.LLMRequest.SerializeToString,
             raft__node__pb2.LLMResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def GetContextSuggestions(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/raft.RaftNode/GetContextSuggestions',
+            raft__node__pb2.ContextSuggestionsRequest.SerializeToString,
+            raft__node__pb2.ContextSuggestionsResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def AddUserToChannel(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/raft.RaftNode/AddUserToChannel',
+            raft__node__pb2.ChannelAdminRequest.SerializeToString,
+            raft__node__pb2.StatusResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def RemoveUserFromChannel(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/raft.RaftNode/RemoveUserFromChannel',
+            raft__node__pb2.ChannelAdminRequest.SerializeToString,
+            raft__node__pb2.StatusResponse.FromString,
             options,
             channel_credentials,
             insecure,

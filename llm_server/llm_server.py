@@ -7,6 +7,7 @@ import os
 import uuid
 from typing import List, Dict
 import google.generativeai as genai
+import datetime
 
 # Add parent directory to path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -118,10 +119,13 @@ class LLMServicer(llm_service_pb2_grpc.LLMServiceServicer):
         context_messages = list(request.context)
         current_input = request.current_input
         
-        logger.info(f"Getting context suggestions...")
+        logger.info(f"Getting context suggestions for input: '{current_input}'")
+        logger.info(f"Context messages count: {len(context_messages)}")
         
         try:
             suggestions, topics = self._get_context_suggestions(context_messages, current_input)
+            
+            logger.info(f"Generated {len(suggestions)} suggestions: {suggestions}")
             
             return llm_service_pb2.SuggestionsResponse(
                 request_id=request_id,
@@ -131,6 +135,8 @@ class LLMServicer(llm_service_pb2_grpc.LLMServiceServicer):
             
         except Exception as e:
             logger.error(f"Error getting suggestions: {e}")
+            import traceback
+            traceback.print_exc()  # Print full stack trace
             return llm_service_pb2.SuggestionsResponse(
                 request_id=request_id,
                 suggestions=["sounds interesting", "tell me more", "I see"],
@@ -266,18 +272,39 @@ Key Points:
     def _get_context_suggestions(self, messages: List, current_input: str) -> tuple:
         """Get context-aware suggestions using Gemini"""
         try:
-            context = "\n".join([f"{m.sender}: {m.content}" for m in messages[-5:]]) if messages else "No previous context"
+            # Build conversation context from Message objects (not ChatMessage)
+            if messages:
+                context = "\n".join([f"{m.sender}: {m.content}" for m in messages[-5:]])
+            else:
+                context = "No previous context"
             
-            prompt = f"""Based on this conversation context:
+            # Include partial input in prompt
+            if current_input:
+                prompt = f"""Based on this conversation context:
 {context}
 
-Current partial input: "{current_input}"
+User started typing: "{current_input}"
 
-Provide:
-1. Three completion suggestions for what the user might want to say
-2. Two related topics they might want to discuss
+Provide 3 natural completions for what they might want to say next, completing their thought.
+Also suggest 2 related topics they could discuss.
 
-Format:
+Format as simple lists:
+COMPLETIONS:
+- completion 1
+- completion 2  
+- completion 3
+
+TOPICS:
+- topic 1
+- topic 2"""
+            else:
+                prompt = f"""Based on this conversation context:
+{context}
+
+Suggest 3 natural things the user might want to say next.
+Also suggest 2 related topics they could discuss.
+
+Format as simple lists:
 COMPLETIONS:
 - suggestion 1
 - suggestion 2
@@ -312,10 +339,19 @@ TOPICS:
             
             # Ensure we have at least some suggestions
             if not suggestions:
-                suggestions = ["continue the thought", "ask a question", "share more details"]
+                if current_input:
+                    suggestions = [
+                        f"{current_input} be the best option",
+                        f"{current_input} work well", 
+                        f"{current_input} make sense"
+                    ]
+                else:
+                    suggestions = ["continue the thought", "ask a question", "share more details"]
+            
             if not topics:
                 topics = ["current discussion", "related ideas"]
             
+            logger.info(f"Generated {len(suggestions)} suggestions and {len(topics)} topics")
             return suggestions[:5], topics[:3]
             
         except Exception as e:

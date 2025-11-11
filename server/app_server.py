@@ -17,6 +17,7 @@ import threading
 from typing import Dict, List, Optional, Set
 from queue import Queue
 import mimetypes
+import datetime
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -171,7 +172,7 @@ class ChatServicer(chat_service_pb2_grpc.ChatServiceServicer):
                 "is_private": False,
                 "members": set(),
                 "admins": set(["system"]),  # Channel admins
-                "created_at": datetime.utcnow(),
+                "created_at": datetime.datetime.now(datetime.timezone.utc),
                 "created_by": "system"
             }
             self.messages[channel_id] = []
@@ -196,9 +197,9 @@ class ChatServicer(chat_service_pb2_grpc.ChatServiceServicer):
                 "email": user_data["email"],
                 "display_name": user_data["display_name"],
                 "is_admin": user_data["is_admin"],
-                "created_at": datetime.utcnow(),
+                "created_at": datetime.datetime.now(datetime.timezone.utc),
                 "status": "offline",
-                "last_seen": datetime.utcnow()
+                "last_seen": datetime.datetime.now(datetime.timezone.utc)
             }
             self.users_by_email[user_data["email"]] = user_data["username"]
             self.users_by_id[user_id] = user_data["username"]
@@ -219,8 +220,8 @@ class ChatServicer(chat_service_pb2_grpc.ChatServiceServicer):
         payload = {
             "user_id": user_id,
             "username": username,
-            "exp": datetime.utcnow() + timedelta(hours=24),
-            "iat": datetime.utcnow()
+            "exp": datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(hours=24),
+            "iat": datetime.datetime.now(datetime.timezone.utc)
         }
         return jwt.encode(payload, self.jwt_secret, algorithm="HS256")
     
@@ -295,9 +296,9 @@ class ChatServicer(chat_service_pb2_grpc.ChatServiceServicer):
                 "email": email,
                 "display_name": display_name,
                 "is_admin": False,
-                "created_at": datetime.utcnow(),
+                "created_at": datetime.datetime.now(datetime.timezone.utc),
                 "status": "offline",
-                "last_seen": datetime.utcnow()
+                "last_seen": datetime.datetime.now(datetime.timezone.utc)
             }
             
             self.users[username] = user_data
@@ -339,12 +340,12 @@ class ChatServicer(chat_service_pb2_grpc.ChatServiceServicer):
         self.sessions[token] = {
             "user_id": user["id"],
             "username": username,
-            "login_time": datetime.utcnow(),
-            "last_activity": datetime.utcnow()
+            "login_time": datetime.datetime.now(datetime.timezone.utc),
+            "last_activity": datetime.datetime.now(datetime.timezone.utc)
         }
         
         user["status"] = "online"
-        user["last_seen"] = datetime.utcnow()
+        user["last_seen"] = datetime.datetime.now(datetime.timezone.utc)
         self.online_users.add(username)
         self._save_users()  # Save status change
         
@@ -401,7 +402,7 @@ class ChatServicer(chat_service_pb2_grpc.ChatServiceServicer):
             "is_private": request.is_private,
             "members": {user_id},  # Creator is first member
             "admins": {user_id},  # Creator is admin
-            "created_at": datetime.utcnow(),
+            "created_at": datetime.datetime.now(datetime.timezone.utc),
             "created_by": username
         }
         self.messages[channel_id] = []
@@ -538,7 +539,7 @@ class ChatServicer(chat_service_pb2_grpc.ChatServiceServicer):
             "channel_id": channel_id,
             "content": request.content,
             "type": request.type,
-            "timestamp": datetime.utcnow()
+            "timestamp": datetime.datetime.now(datetime.timezone.utc)
         }
         
         if channel_id not in self.messages:
@@ -592,7 +593,7 @@ class ChatServicer(chat_service_pb2_grpc.ChatServiceServicer):
             "recipient_id": recipient_id,
             "recipient_name": recipient_username,
             "content": request.content,
-            "timestamp": datetime.utcnow(),
+            "timestamp": datetime.datetime.now(datetime.timezone.utc),
             "is_read": False
         }
         
@@ -715,7 +716,7 @@ class ChatServicer(chat_service_pb2_grpc.ChatServiceServicer):
             "channel_id": request.channel_id if request.channel_id else None,
             "recipient": request.recipient_username if request.recipient_username else None,
             "description": request.description,
-            "uploaded_at": datetime.utcnow()
+            "uploaded_at": datetime.datetime.now(datetime.timezone.utc)
         }
         
         file_url = f"file://{file_id}"
@@ -810,7 +811,7 @@ class ChatServicer(chat_service_pb2_grpc.ChatServiceServicer):
         
         if username in self.users:
             self.users[username]["status"] = "offline"
-            self.users[username]["last_seen"] = datetime.utcnow()
+            self.users[username]["last_seen"] = datetime.datetime.now(datetime.timezone.utc)
             self.online_users.discard(username)
             self._save_users()  # Save offline status
         

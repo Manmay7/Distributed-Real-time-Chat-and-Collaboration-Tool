@@ -17,6 +17,7 @@ service RaftNode {
   rpc CreateChannel(CreateChannelRequest) returns (StatusResponse);
   rpc GetChannels(GetChannelsRequest) returns (ChannelListResponse);
   rpc JoinChannel(JoinChannelRequest) returns (StatusResponse);
+  rpc GetChannelMembers(GetChannelMembersRequest) returns (ChannelMembersResponse);  // NEW!
   
   // Messaging
   rpc SendMessage(SendMessageRequest) returns (StatusResponse);
@@ -37,7 +38,8 @@ service RaftNode {
   rpc GetSmartReply(SmartReplyRequest) returns (SmartReplyResponse);
   rpc SummarizeConversation(SummarizeRequest) returns (SummarizeResponse);
   rpc GetLLMAnswer(LLMRequest) returns (LLMResponse);
-  
+  rpc GetContextSuggestions(ContextSuggestionsRequest) returns (ContextSuggestionsResponse);  // NEW!
+
   // NEW: Channel admin operations
   rpc AddUserToChannel(ChannelAdminRequest) returns (StatusResponse);
   rpc RemoveUserFromChannel(ChannelAdminRequest) returns (StatusResponse);
@@ -322,11 +324,45 @@ message LLMResponse {
   string answer = 2;
 }
 
+// NEW: Context-aware suggestions
+message ContextSuggestionsRequest {
+  string token = 1;
+  string channel_id = 2;
+  string current_input = 3;
+  int32 context_message_count = 4;
+}
+
+message ContextSuggestionsResponse {
+  bool success = 1;
+  repeated string suggestions = 2;
+  repeated string topics = 3;
+}
+
 // NEW: Channel admin operations
 message ChannelAdminRequest {
   string token = 1;
   string channel_id = 2;
   string target_username = 3;
+}
+
+// NEW: Get channel members
+message GetChannelMembersRequest {
+  string token = 1;
+  string channel_id = 2;
+}
+
+message ChannelMember {
+  string user_id = 1;
+  string username = 2;
+  string display_name = 3;
+  bool is_admin = 4;
+  string status = 5;  // online/offline
+}
+
+message ChannelMembersResponse {
+  bool success = 1;
+  repeated ChannelMember members = 2;
+  int32 total_count = 3;
 }
 
 // Generic status response
