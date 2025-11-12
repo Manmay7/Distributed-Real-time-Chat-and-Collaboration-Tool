@@ -1083,7 +1083,7 @@ class ChatClient(cmd.Cmd):
                 context_message_count=5
             )
             
-            response = self.stub.GetContextSuggestions(request, timeout=35.0)  # Increased timeout
+            response = self.stub.GetContextSuggestions(request, timeout=8.0)
             
             if response.success:
                 if response.suggestions:
@@ -1106,22 +1106,22 @@ class ChatClient(cmd.Cmd):
             print(f"Error: {e}")
     
     def do_summarize(self, arg):
-        """Summarize recent conversation: summarize [message_count]"""
+        """Summarize conversation: summarize [message_count]"""
         if not self.token or not self.current_channel or self.dm_mode:
             print("Only works in channels")
             return
         
         # Parse message count
-        count = 20  # Default
+        count = 20
         if arg.strip():
             try:
                 count = int(arg.strip())
-                if count < 1 or count > 100:
-                    print("Message count must be between 1 and 100")
-                    return
+                if count < 5:
+                    count = 5
+                elif count > 100:
+                    count = 100
             except ValueError:
-                print("Usage: summarize [message_count]")
-                return
+                print("Invalid number. Using default (20 messages)")
         
         try:
             print(f"🤖 Summarizing last {count} messages...")
@@ -1132,15 +1132,69 @@ class ChatClient(cmd.Cmd):
                 message_count=count
             )
             
-            response = self.stub.SummarizeConversation(request, timeout=35.0)  # Increased timeout
+            # Increased timeout to 15 seconds for summarization
+            response = self.stub.SummarizeConversation(request, timeout=15.0)
             
             if response.success:
-                print("\n📝 Summary:")
-                print("-" * 60)
-                print(response.summary)
+                print("\n" + "="*60)
+                print("📝 CONVERSATION SUMMARY")
+                print("="*60)
+                print(f"\n{response.summary}\n")
                 
                 if response.key_points:
-                    print("\n🔑 Key Points:")
+                    print("🔑 KEY POINTS:")
+                    for i, point in enumerate(response.key_points, 1):
+                        print(f"   {i}. {point}")
+                print("="*60)
+            else:
+                print("❌ Could not generate summary")
+                
+        except grpc.RpcError as e:
+            if e.code() == grpc.StatusCode.DEADLINE_EXCEEDED:
+                print("⏱️  Summary generation timed out. Try with fewer messages:")
+                print("   Example: summarize 10")
+            else:
+                print(f"Error: {e.code()}")
+        except Exception as e:
+            print(f"Error: {str(e)[:80]}")
+            print("Tip: Make sure the LLM server is running")
+    
+    def do_add_user(self, arg):
+        """Add user to current channel (admin only): add_user <username>"""
+        if not self.token:
+            print("Please login first")
+            return
+        
+        if not self.current_channel:
+            print("❌ Join a channel first")
+            return
+        
+        if not arg:
+            print("Usage: add_user <username>")
+            return
+        
+        username = arg.strip()
+        
+        try:
+            request = raft_node_pb2.ChannelAdminRequest(
+                token=self.token,
+                channel_id=self.current_channel,
+                target_username=username
+            )
+            
+            response = self._call_leader_with_retry(self.stub.AddUserToChannel, request, timeout=5.0)
+            
+            if response.success:
+                print(f"✓ {response.message}")
+            else:
+                print(f"❌ Failed: {response.message}")
+                
+        except Exception as e:
+            print(f"Error: {e}")
+    
+    def do_remove_user(self, arg):
+        """Remove user from current channel (admin only): remove_user <username>"""
+        if not self.token:
             print("Please login first")
             return
         
