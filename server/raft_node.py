@@ -1783,13 +1783,13 @@ class RaftNode(raft_node_pb2_grpc.RaftNodeServicer):
                     )
                     llm_messages.append(llm_msg)
                 
-                # Call LLM service
+                # Call LLM service with increased timeout
                 llm_request = llm_service_pb2.SmartReplyRequest(
                     request_id=str(uuid.uuid4()),
                     recent_messages=llm_messages
                 )
                 
-                llm_response = self.llm_stub.GetSmartReply(llm_request, timeout=5.0)
+                llm_response = self.llm_stub.GetSmartReply(llm_request, timeout=10.0)  # Increased from 5.0 to 10.0
                 
                 return raft_node_pb2.SmartReplyResponse(
                     success=True,
