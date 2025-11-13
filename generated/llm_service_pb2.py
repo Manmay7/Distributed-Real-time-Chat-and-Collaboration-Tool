@@ -24,7 +24,7 @@ _sym_db = _symbol_database.Default()
 
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x11llm_service.proto\x12\x03llm\"\xa8\x01\n\nLLMRequest\x12\x12\n\nrequest_id\x18\x01 \x01(\t\x12\r\n\x05query\x18\x02 \x01(\t\x12\x0f\n\x07\x63ontext\x18\x03 \x03(\t\x12\x33\n\nparameters\x18\x04 \x03(\x0b\x32\x1f.llm.LLMRequest.ParametersEntry\x1a\x31\n\x0fParametersEntry\x12\x0b\n\x03key\x18\x01 \x01(\t\x12\r\n\x05value\x18\x02 \x01(\t:\x02\x38\x01\"E\n\x0bLLMResponse\x12\x12\n\nrequest_id\x18\x01 \x01(\t\x12\x0e\n\x06\x61nswer\x18\x02 \x01(\t\x12\x12\n\nconfidence\x18\x03 \x01(\x02\"c\n\x11SmartReplyRequest\x12\x12\n\nrequest_id\x18\x01 \x01(\t\x12)\n\x0frecent_messages\x18\x02 \x03(\x0b\x32\x10.llm.ChatMessage\x12\x0f\n\x07user_id\x18\x03 \x01(\t\"*\n\x07Message\x12\x0e\n\x06sender\x18\x01 \x01(\t\x12\x0f\n\x07\x63ontent\x18\x02 \x01(\t\"A\n\x0b\x43hatMessage\x12\x0e\n\x06sender\x18\x01 \x01(\t\x12\x0f\n\x07\x63ontent\x18\x02 \x01(\t\x12\x11\n\ttimestamp\x18\x03 \x01(\x03\"=\n\x12SmartReplyResponse\x12\x12\n\nrequest_id\x18\x01 \x01(\t\x12\x13\n\x0bsuggestions\x18\x02 \x03(\t\"^\n\x10SummarizeRequest\x12\x12\n\nrequest_id\x18\x01 \x01(\t\x12\"\n\x08messages\x18\x02 \x03(\x0b\x32\x10.llm.ChatMessage\x12\x12\n\nmax_length\x18\x03 \x01(\x05\"L\n\x11SummarizeResponse\x12\x12\n\nrequest_id\x18\x01 \x01(\t\x12\x0f\n\x07summary\x18\x02 \x01(\t\x12\x12\n\nkey_points\x18\x03 \x03(\t\"Z\n\x0e\x43ontextRequest\x12\x12\n\nrequest_id\x18\x01 \x01(\t\x12\x1d\n\x07\x63ontext\x18\x02 \x03(\x0b\x32\x0c.llm.Message\x12\x15\n\rcurrent_input\x18\x03 \x01(\t\"N\n\x13SuggestionsResponse\x12\x12\n\nrequest_id\x18\x01 \x01(\t\x12\x13\n\x0bsuggestions\x18\x02 \x03(\t\x12\x0e\n\x06topics\x18\x03 \x03(\t2\x91\x02\n\nLLMService\x12\x31\n\x0cGetLLMAnswer\x12\x0f.llm.LLMRequest\x1a\x10.llm.LLMResponse\x12@\n\rGetSmartReply\x12\x16.llm.SmartReplyRequest\x1a\x17.llm.SmartReplyResponse\x12\x46\n\x15SummarizeConversation\x12\x15.llm.SummarizeRequest\x1a\x16.llm.SummarizeResponse\x12\x46\n\x15GetContextSuggestions\x12\x13.llm.ContextRequest\x1a\x18.llm.SuggestionsResponseb\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x11llm_service.proto\x12\x03llm\"*\n\x07Message\x12\x0e\n\x06sender\x18\x01 \x01(\t\x12\x0f\n\x07\x63ontent\x18\x02 \x01(\t\"\xa8\x01\n\nLLMRequest\x12\x12\n\nrequest_id\x18\x01 \x01(\t\x12\r\n\x05query\x18\x02 \x01(\t\x12\x0f\n\x07\x63ontext\x18\x03 \x03(\t\x12\x33\n\nparameters\x18\x04 \x03(\x0b\x32\x1f.llm.LLMRequest.ParametersEntry\x1a\x31\n\x0fParametersEntry\x12\x0b\n\x03key\x18\x01 \x01(\t\x12\r\n\x05value\x18\x02 \x01(\t:\x02\x38\x01\"E\n\x0bLLMResponse\x12\x12\n\nrequest_id\x18\x01 \x01(\t\x12\x0e\n\x06\x61nswer\x18\x02 \x01(\t\x12\x12\n\nconfidence\x18\x03 \x01(\x02\"_\n\x11SmartReplyRequest\x12\x12\n\nrequest_id\x18\x01 \x01(\t\x12%\n\x0frecent_messages\x18\x02 \x03(\x0b\x32\x0c.llm.Message\x12\x0f\n\x07user_id\x18\x03 \x01(\t\"=\n\x12SmartReplyResponse\x12\x12\n\nrequest_id\x18\x01 \x01(\t\x12\x13\n\x0bsuggestions\x18\x02 \x03(\t\"Z\n\x10SummarizeRequest\x12\x12\n\nrequest_id\x18\x01 \x01(\t\x12\x1e\n\x08messages\x18\x02 \x03(\x0b\x32\x0c.llm.Message\x12\x12\n\nmax_length\x18\x03 \x01(\x05\"L\n\x11SummarizeResponse\x12\x12\n\nrequest_id\x18\x01 \x01(\t\x12\x0f\n\x07summary\x18\x02 \x01(\t\x12\x12\n\nkey_points\x18\x03 \x03(\t\"Z\n\x0e\x43ontextRequest\x12\x12\n\nrequest_id\x18\x01 \x01(\t\x12\x1d\n\x07\x63ontext\x18\x02 \x03(\x0b\x32\x0c.llm.Message\x12\x15\n\rcurrent_input\x18\x03 \x01(\t\"N\n\x13SuggestionsResponse\x12\x12\n\nrequest_id\x18\x01 \x01(\t\x12\x13\n\x0bsuggestions\x18\x02 \x03(\t\x12\x0e\n\x06topics\x18\x03 \x03(\t2\x91\x02\n\nLLMService\x12\x31\n\x0cGetLLMAnswer\x12\x0f.llm.LLMRequest\x1a\x10.llm.LLMResponse\x12@\n\rGetSmartReply\x12\x16.llm.SmartReplyRequest\x1a\x17.llm.SmartReplyResponse\x12\x46\n\x15SummarizeConversation\x12\x15.llm.SummarizeRequest\x1a\x16.llm.SummarizeResponse\x12\x46\n\x15GetContextSuggestions\x12\x13.llm.ContextRequest\x1a\x18.llm.SuggestionsResponseb\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
@@ -33,28 +33,26 @@ if not _descriptor._USE_C_DESCRIPTORS:
   DESCRIPTOR._loaded_options = None
   _globals['_LLMREQUEST_PARAMETERSENTRY']._loaded_options = None
   _globals['_LLMREQUEST_PARAMETERSENTRY']._serialized_options = b'8\001'
-  _globals['_LLMREQUEST']._serialized_start=27
-  _globals['_LLMREQUEST']._serialized_end=195
-  _globals['_LLMREQUEST_PARAMETERSENTRY']._serialized_start=146
-  _globals['_LLMREQUEST_PARAMETERSENTRY']._serialized_end=195
-  _globals['_LLMRESPONSE']._serialized_start=197
-  _globals['_LLMRESPONSE']._serialized_end=266
-  _globals['_SMARTREPLYREQUEST']._serialized_start=268
-  _globals['_SMARTREPLYREQUEST']._serialized_end=367
-  _globals['_MESSAGE']._serialized_start=369
-  _globals['_MESSAGE']._serialized_end=411
-  _globals['_CHATMESSAGE']._serialized_start=413
-  _globals['_CHATMESSAGE']._serialized_end=478
-  _globals['_SMARTREPLYRESPONSE']._serialized_start=480
-  _globals['_SMARTREPLYRESPONSE']._serialized_end=541
-  _globals['_SUMMARIZEREQUEST']._serialized_start=543
-  _globals['_SUMMARIZEREQUEST']._serialized_end=637
-  _globals['_SUMMARIZERESPONSE']._serialized_start=639
-  _globals['_SUMMARIZERESPONSE']._serialized_end=715
-  _globals['_CONTEXTREQUEST']._serialized_start=717
-  _globals['_CONTEXTREQUEST']._serialized_end=807
-  _globals['_SUGGESTIONSRESPONSE']._serialized_start=809
-  _globals['_SUGGESTIONSRESPONSE']._serialized_end=887
-  _globals['_LLMSERVICE']._serialized_start=890
-  _globals['_LLMSERVICE']._serialized_end=1163
+  _globals['_MESSAGE']._serialized_start=26
+  _globals['_MESSAGE']._serialized_end=68
+  _globals['_LLMREQUEST']._serialized_start=71
+  _globals['_LLMREQUEST']._serialized_end=239
+  _globals['_LLMREQUEST_PARAMETERSENTRY']._serialized_start=190
+  _globals['_LLMREQUEST_PARAMETERSENTRY']._serialized_end=239
+  _globals['_LLMRESPONSE']._serialized_start=241
+  _globals['_LLMRESPONSE']._serialized_end=310
+  _globals['_SMARTREPLYREQUEST']._serialized_start=312
+  _globals['_SMARTREPLYREQUEST']._serialized_end=407
+  _globals['_SMARTREPLYRESPONSE']._serialized_start=409
+  _globals['_SMARTREPLYRESPONSE']._serialized_end=470
+  _globals['_SUMMARIZEREQUEST']._serialized_start=472
+  _globals['_SUMMARIZEREQUEST']._serialized_end=562
+  _globals['_SUMMARIZERESPONSE']._serialized_start=564
+  _globals['_SUMMARIZERESPONSE']._serialized_end=640
+  _globals['_CONTEXTREQUEST']._serialized_start=642
+  _globals['_CONTEXTREQUEST']._serialized_end=732
+  _globals['_SUGGESTIONSRESPONSE']._serialized_start=734
+  _globals['_SUGGESTIONSRESPONSE']._serialized_end=812
+  _globals['_LLMSERVICE']._serialized_start=815
+  _globals['_LLMSERVICE']._serialized_end=1088
 # @@protoc_insertion_point(module_scope)

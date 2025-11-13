@@ -9,6 +9,12 @@ service LLMService {
     rpc GetContextSuggestions(ContextRequest) returns (SuggestionsResponse);
 }
 
+// Single consistent Message type used everywhere
+message Message {
+    string sender = 1;
+    string content = 2;
+}
+
 message LLMRequest {
     string request_id = 1;
     string query = 2;
@@ -24,20 +30,8 @@ message LLMResponse {
 
 message SmartReplyRequest {
     string request_id = 1;
-    repeated ChatMessage recent_messages = 2;
+    repeated Message recent_messages = 2;  // Changed from ChatMessage to Message
     string user_id = 3;
-}
-
-// Renamed from ChatMessage to avoid conflicts
-message Message {
-    string sender = 1;
-    string content = 2;
-}
-
-message ChatMessage {
-    string sender = 1;
-    string content = 2;
-    int64 timestamp = 3;
 }
 
 message SmartReplyResponse {
@@ -47,7 +41,7 @@ message SmartReplyResponse {
 
 message SummarizeRequest {
     string request_id = 1;
-    repeated ChatMessage messages = 2;
+    repeated Message messages = 2;  // Changed from ChatMessage to Message
     int32 max_length = 3;
 }
 
@@ -59,7 +53,7 @@ message SummarizeResponse {
 
 message ContextRequest {
     string request_id = 1;
-    repeated Message context = 2;  // Uses Message (simple version)
+    repeated Message context = 2;
     string current_input = 3;
 }
 

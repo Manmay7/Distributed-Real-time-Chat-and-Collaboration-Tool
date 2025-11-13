@@ -683,53 +683,105 @@ class RaftNode(raft_node_pb2_grpc.RaftNodeServicer):
         self.state = NodeState.LEADER
         self.current_leader_id = self.node_id
         
-        # CRITICAL FIX: Always force full state rebuild from Raft log
-        # This handles cases where:
-        # 1. Previous leader died before persisting to disk
-        # 2. This node was a follower with partial state
-        # 3. DMs/messages exist in log but not in memory
+        # CRITICAL FIX: ALWAYS rebuild ALL state from Raft log (single source of truth)
+        # Disk files are just caches - Raft log is authoritative
         
         if self.commit_index >= 0:
-            logger.info(f"🔄 New leader rebuilding state from Raft log...")
-            logger.info(f"   Current state: {len(self.users)} users, {len(self.channels)} channels, {len(self.direct_messages)} DMs")
-            logger.info(f"   Last applied: {self.last_applied}, Commit index: {self.commit_index}")
+            logger.info(f"🔄 New leader FORCING FULL state rebuild from Raft log...")
+            logger.info(f"   Current state BEFORE rebuild:")
+            logger.info(f"     Users: {len(self.users)}, Channels: {len(self.channels)}")
             
-            # Count expected items from log
-            expected_dms = sum(1 for i in range(self.commit_index + 1) if i < len(self.log) and self.log[i].command == "SEND_DM")
-            expected_messages = sum(1 for i in range(self.commit_index + 1) if i < len(self.log) and self.log[i].command == "SEND_MESSAGE")
+            # Log current channel memberships
+            for cid, channel in self.channels.items():
+                logger.info(f"     #{channel['name']}: {len(channel['members'])} members")
             
-            logger.info(f"   Expected from log: {expected_dms} DMs, {expected_messages} messages")
+            logger.info(f"     DMs: {len(self.direct_messages)}, Messages: {sum(len(msgs) for msgs in self.channel_messages.values())}")
+            logger.info(f"     Last applied: {self.last_applied}, Commit index: {self.commit_index}")
             
-            # ALWAYS do full replay if there's any mismatch or if we're behind
-            needs_full_replay = (
-                len(self.direct_messages) < expected_dms or
-                self.last_applied < self.commit_index or
-                expected_dms > 0  # Force replay if there are ANY DMs in the log
-            )
+            # Count expected items from Raft log
+            expected_users = 0
+            expected_channels = 0
+            expected_joins = 0
+            expected_dms = 0
+            expected_messages = 0
             
-            if needs_full_replay:
-                logger.warning(f"⚠️  State mismatch detected! Performing FULL state rebuild...")
-                
-                # Clear state and rebuild from scratch
-                self.direct_messages = []
-                self.channel_messages = {}
-                
-                # Force replay ALL committed entries
-                old_last_applied = self.last_applied
-                self.last_applied = -1
-                
-                self._apply_committed_entries()
-                
-                logger.info(f"✅ Full state rebuilt from log:")
-                logger.info(f"   Users: {len(self.users)}, Channels: {len(self.channels)}")
-                logger.info(f"   DMs: {len(self.direct_messages)}, Messages: {sum(len(msgs) for msgs in self.channel_messages.values())}")
-                
-                # Persist the rebuilt state
-                self._save_direct_messages()
-                self._save_messages()
-                self._save_channels()
+            for i in range(self.commit_index + 1):
+                if i < len(self.log):
+                    cmd = self.log[i].command
+                    if cmd == "CREATE_USER":
+                        expected_users += 1
+                    elif cmd == "CREATE_CHANNEL":
+                        expected_channels += 1
+                    elif cmd == "JOIN_CHANNEL":
+                        expected_joins += 1
+                    elif cmd == "SEND_DM":
+                        expected_dms += 1
+                    elif cmd == "SEND_MESSAGE":
+                        expected_messages += 1
+            
+            logger.info(f"   Expected from Raft log:")
+            logger.info(f"     {expected_users} users, {expected_channels} channels, {expected_joins} joins")
+            logger.info(f"     {expected_dms} DMs, {expected_messages} messages")
+            
+            # FULL REBUILD: Clear ALL application state (except users/channels from disk as base)
+            # Strategy: Keep disk users/channels as fallback, but let log updates override
+            
+            logger.warning(f"⚠️  FORCING FULL STATE REBUILD from Raft log (disk is just cache)...")
+            
+            # Keep disk users/channels but clear transactional data
+            # This preserves users/channels that were created outside Raft (like test users)
+            logger.info("🗑️  Clearing transactional state (messages, DMs)...")
+            self.direct_messages = []
+            self.channel_messages = {}
+            
+            # Clear channel memberships (will be rebuilt from JOIN_CHANNEL commands)
+            logger.info("🗑️  Clearing channel memberships (will rebuild from log)...")
+            for channel in self.channels.values():
+                channel['members'] = set()  # Clear all members
+            
+            # Force replay ALL committed entries from the beginning
+            old_last_applied = self.last_applied
+            self.last_applied = -1
+            
+            logger.info(f"♻️  Replaying ALL {self.commit_index + 1} log entries...")
+            self._apply_committed_entries()
+            
+            # Count final state
+            new_actual_messages = sum(len(msgs) for msgs in self.channel_messages.values())
+            total_members = sum(len(ch['members']) for ch in self.channels.values())
+            
+            logger.info(f"✅ FULL REBUILD COMPLETE:")
+            logger.info(f"   Users: {len(self.users)} (expected {expected_users} new + existing)")
+            logger.info(f"   Channels: {len(self.channels)} (expected {expected_channels} new + existing)")
+            
+            # Log each channel's final member count
+            for cid, channel in self.channels.items():
+                logger.info(f"     #{channel['name']}: {len(channel['members'])} members")
+            
+            logger.info(f"   Total JOIN operations applied: {expected_joins}")
+            logger.info(f"   DMs: {len(self.direct_messages)}/{expected_dms} expected")
+            logger.info(f"   Messages: {new_actual_messages}/{expected_messages} expected")
+            logger.info(f"   Last applied: {old_last_applied} → {self.last_applied}")
+            
+            # Persist the rebuilt state
+            self._save_users()
+            self._save_channels()
+            self._save_direct_messages()
+            self._save_messages()
+            
+            # Verify counts match
+            if len(self.direct_messages) != expected_dms:
+                logger.error(f"❌ DM COUNT MISMATCH: Expected {expected_dms}, got {len(self.direct_messages)}")
+            elif new_actual_messages != expected_messages:
+                logger.error(f"❌ MESSAGE COUNT MISMATCH: Expected {expected_messages}, got {new_actual_messages}")
             else:
-                logger.info(f"✅ State already up-to-date, no rebuild needed")
+                logger.info(f"✅ All transactional counts match!")
+            
+            # Verify channel memberships
+            if total_members == 0 and expected_joins > 0:
+                logger.error(f"❌ CRITICAL: {expected_joins} JOIN commands but 0 members! Check _apply_join_channel()")
+            else:
+                logger.info(f"✅ Channel memberships rebuilt: {total_members} total members across {len(self.channels)} channels")
         
         # Initialize leader state
         for peer_id in self.peers:
@@ -1091,6 +1143,7 @@ class RaftNode(raft_node_pb2_grpc.RaftNodeServicer):
 
     def _apply_committed_entries(self):
         """Apply committed log entries"""
+        applied_count = 0
         while self.last_applied < self.commit_index:
             self.last_applied += 1
             entry = self.log[self.last_applied]
@@ -1098,6 +1151,9 @@ class RaftNode(raft_node_pb2_grpc.RaftNodeServicer):
             try:
                 data = json.loads(entry.data.decode('utf-8'))
                 command = entry.command
+                
+                # ADD DETAILED LOGGING FOR DEBUGGING
+                logger.info(f"🔄 Applying log[{self.last_applied}]: {command} - Data: {list(data.keys())}")
                 
                 if command == "CREATE_USER":
                     self._apply_create_user(data)
@@ -1107,19 +1163,35 @@ class RaftNode(raft_node_pb2_grpc.RaftNodeServicer):
                     self._apply_create_channel(data)
                 elif command == "JOIN_CHANNEL":
                     self._apply_join_channel(data)
+                    # CRITICAL: Verify it was actually applied
+                    channel_id = data.get('channel_id')
+                    user_id = data.get('user_id')
+                    if channel_id in self.channels:
+                        if user_id in self.channels[channel_id]['members']:
+                            logger.info(f"  ✅ JOIN_CHANNEL succeeded: {user_id} now in channel {channel_id}")
+                        else:
+                            logger.error(f"  ❌ JOIN_CHANNEL FAILED: {user_id} NOT added to channel {channel_id}!")
+                    else:
+                        logger.error(f"  ❌ JOIN_CHANNEL FAILED: channel {channel_id} not found!")
                 elif command == "LEAVE_CHANNEL":
-                    self._apply_leave_channel(data)  # NEW: Handle LEAVE_CHANNEL
+                    self._apply_leave_channel(data)
                 elif command == "SEND_MESSAGE":
                     self._apply_send_message(data)
                 elif command == "SEND_DM":
                     self._apply_send_dm(data)
                 elif command == "UPLOAD_FILE":
                     self._apply_upload_file(data)
+                else:
+                    logger.warning(f"  ⚠️  Unknown command: {command}")
                 
-                logger.debug(f"Applied {command} from log")
+                applied_count += 1
                 
             except Exception as e:
-                logger.error(f"Error applying log entry: {e}")
+                logger.error(f"❌ Error applying log[{self.last_applied}] ({command}): {e}")
+                import traceback
+                traceback.print_exc()
+        
+        logger.info(f"♻️  Applied {applied_count} log entries")
         
         # 💾 SAVE STATE: Persist last_applied
         if self.last_applied >= 0:
@@ -1178,10 +1250,21 @@ class RaftNode(raft_node_pb2_grpc.RaftNodeServicer):
         """Apply channel join from log"""
         channel_id = data['channel_id']
         user_id = data['user_id']
-        if channel_id in self.channels:
-            self.channels[channel_id]['members'].add(user_id)
-            self._save_channels()  # ← CRITICAL: Save after EVERY join!
-            logger.debug(f"Applied JOIN_CHANNEL: user {user_id} → channel {channel_id}, now {len(self.channels[channel_id]['members'])} members")
+        
+        logger.debug(f"_apply_join_channel called: channel={channel_id}, user={user_id}")
+        
+        if channel_id not in self.channels:
+            logger.error(f"❌ Channel {channel_id} not found when applying JOIN_CHANNEL!")
+            return
+        
+        # ADD the user to the channel
+        before_count = len(self.channels[channel_id]['members'])
+        self.channels[channel_id]['members'].add(user_id)
+        after_count = len(self.channels[channel_id]['members'])
+        
+        self._save_channels()  # ← CRITICAL: Save after EVERY join!
+        
+        logger.info(f"✅ Applied JOIN_CHANNEL: user {user_id} → channel {channel_id}, members: {before_count}→{after_count}")
 
     def _apply_leave_channel(self, data: dict):
         """Apply channel leave/removal from log"""
@@ -1195,11 +1278,26 @@ class RaftNode(raft_node_pb2_grpc.RaftNodeServicer):
     def _apply_send_message(self, data: dict):
         """Apply message from log"""
         channel_id = data['channel_id']
+        message_id = data.get('id')
+        
+        # CRITICAL FIX: Check for duplicate messages before adding
+        if channel_id in self.channel_messages:
+            # Check if message already exists
+            for existing_msg in self.channel_messages[channel_id]:
+                if existing_msg.get('id') == message_id:
+                    logger.debug(f"Message {message_id} already exists, skipping duplicate")
+                    return  # Skip duplicate
+        
+        # Initialize channel messages list if needed
         if channel_id not in self.channel_messages:
             self.channel_messages[channel_id] = []
+        
         self.channel_messages[channel_id].append(data)
-        # NEW: Persist messages after adding
+        
+        # CRITICAL: Persist messages immediately after adding
         self._save_messages()
+        
+        logger.debug(f"Applied SEND_MESSAGE: {data['sender_name']} → channel {channel_id}, total messages: {len(self.channel_messages[channel_id])}")
     
     def _apply_send_dm(self, data: dict):
         """Apply DM from log"""
@@ -1213,8 +1311,10 @@ class RaftNode(raft_node_pb2_grpc.RaftNodeServicer):
                     return  # Skip duplicate
         
         self.direct_messages.append(data)
+        
         # CRITICAL FIX: Persist DMs after adding
         self._save_direct_messages()
+        
         logger.debug(f"Applied SEND_DM: {data['sender_name']} → {data['recipient_name']}, total DMs: {len(self.direct_messages)}")
     
     def _apply_upload_file(self, data: dict):
@@ -1633,7 +1733,7 @@ class RaftNode(raft_node_pb2_grpc.RaftNodeServicer):
             return raft_node_pb2.StatusResponse(success=True, message="Message sent")
     
     def SendDirectMessage(self, request, context):
-        """Send direct message"""
+        """Send direct message to another user"""
         with self.lock:
             payload = self._verify_token(request.token)
             if not payload:
@@ -1661,6 +1761,7 @@ class RaftNode(raft_node_pb2_grpc.RaftNodeServicer):
             if not self._replicate_state_change("SEND_DM", dm):
                 return raft_node_pb2.StatusResponse(success=False, message="Replication failed")
             
+            logger.info(f"DM from {payload['username']} to {request.recipient_username} replicated")
             return raft_node_pb2.StatusResponse(success=True, message="DM sent")
     
     def UploadFile(self, request, context):
@@ -1789,7 +1890,7 @@ class RaftNode(raft_node_pb2_grpc.RaftNodeServicer):
                     recent_messages=llm_messages
                 )
                 
-                llm_response = self.llm_stub.GetSmartReply(llm_request, timeout=10.0)  # Increased from 5.0 to 10.0
+                llm_response = self.llm_stub.GetSmartReply(llm_request, timeout=20.0)  # Increased from 5.0 to 10.0
                 
                 return raft_node_pb2.SmartReplyResponse(
                     success=True,
@@ -1853,7 +1954,6 @@ class RaftNode(raft_node_pb2_grpc.RaftNodeServicer):
                     max_length=200,
                 )
                 
-               
                 llm_response = self.llm_stub.SummarizeConversation(llm_request, timeout=10.0)
                 
                 return raft_node_pb2.SummarizeResponse(

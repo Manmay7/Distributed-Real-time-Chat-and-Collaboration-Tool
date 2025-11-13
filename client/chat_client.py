@@ -672,36 +672,75 @@ class ChatClient(cmd.Cmd):
         print(f"   Type 'back' to return to channels")
         
         try:
-            # CRITICAL FIX: Ensure connected to a healthy node before fetching DMs
-            if not self._ensure_connected_to_leader():
-                print("\n⚠️  Not connected to any server. Type 'reconnect' to find the leader.")
-                print("    Your DM history will be available once reconnected.")
-                return
-            
-            request = raft_node_pb2.GetDirectMessagesRequest(
-                token=self.token,
-                other_username=recipient,
-                limit=20,
-                offset=0
-            )
-            
-            # Use leader-aware call with retry
-            response = self._call_leader_with_retry(self.stub.GetDirectMessages, request, timeout=5.0)
-            
-            if response.success and response.messages:
-                print("\n📜 Recent messages:")
-                print("-" * 50)
-                for dm in response.messages:
-                    timestamp = datetime.fromtimestamp(dm.timestamp / 1000).strftime("%H:%M")
-                    sender = "You" if dm.sender_name == self.username else dm.sender_name
-                    print(f"[{timestamp}] {sender}: {dm.content}")
-                print("-" * 50)
-            else:
-                print("\n💡 No previous messages with this user")
+            # CRITICAL FIX: Force reconnect to ensure we're on a healthy node
+            # Try up to 3 times with fresh connections
+            max_attempts = 3
+            for attempt in range(max_attempts):
+                try:
+                    # First ensure we're connected to leader
+                    if not self._ensure_connected_to_leader():
+                        if attempt < max_attempts - 1:
+                            print(f"⚠️  Not connected to leader, retrying ({attempt+1}/{max_attempts})...")
+                            time.sleep(1.0)
+                            continue
+                        print("\n⚠️  Could not connect to leader. Type 'reconnect' to try again.")
+                        print("    Your DM history will be available once connected.")
+                        return
+                    
+                    # Now fetch DMs with a fresh connection
+                    request = raft_node_pb2.GetDirectMessagesRequest(
+                        token=self.token,
+                        other_username=recipient,
+                        limit=20,
+                        offset=0
+                    )
+                    
+                    # Use longer timeout for potentially slow leader
+                    response = self.stub.GetDirectMessages(request, timeout=5.0)
+                    
+                    if response.success:
+                        if response.messages:
+                            print("\n📜 Recent messages:")
+                            print("-" * 50)
+                            for dm in response.messages:
+                                timestamp = datetime.fromtimestamp(dm.timestamp / 1000).strftime("%H:%M")
+                                sender = "You" if dm.sender_name == self.username else dm.sender_name
+                                print(f"[{timestamp}] {sender}: {dm.content}")
+                            print("-" * 50)
+                        else:
+                            print("\n💡 No previous messages with this user")
+                        return  # Success!
+                    else:
+                        # Response failed, retry
+                        if attempt < max_attempts - 1:
+                            print(f"⚠️  Failed to load DMs, retrying ({attempt+1}/{max_attempts})...")
+                            time.sleep(0.5)
+                            continue
+                        print("\n💡 Could not load DM history. Your new messages will still be saved!")
+                        return
+                
+                except grpc.RpcError as e:
+                    if e.code() == grpc.StatusCode.UNAVAILABLE and attempt < max_attempts - 1:
+                        print(f"⚠️  Connection error, reconnecting ({attempt+1}/{max_attempts})...")
+                        self._reconnect_to_leader()
+                        time.sleep(0.5)
+                        continue
+                    elif attempt == max_attempts - 1:
+                        print(f"\n⚠️  Could not load DM history after {max_attempts} attempts")
+                        print("    Your messages will still be sent and saved!")
+                        return
+                except Exception as e:
+                    if attempt < max_attempts - 1:
+                        print(f"⚠️  Error loading DMs, retrying ({attempt+1}/{max_attempts})...")
+                        time.sleep(0.5)
+                        continue
+                    print(f"\n⚠️  Error: {str(e)[:60]}")
+                    print("    Your messages will still be sent and saved!")
+                    return
+                    
         except Exception as e:
-            print(f"\n⚠️  Could not load DM history: {str(e)[:60]}")
+            print(f"\n⚠️  Unexpected error: {str(e)[:60]}")
             print("    Your messages will still be sent and saved!")
-            print("    Type 'reconnect' if you want to see history from other servers")
     
     def do_conversations(self, arg):
         """List all DM conversations"""
@@ -804,10 +843,25 @@ class ChatClient(cmd.Cmd):
                 self.channel.close()
             except:
                 pass
+            # Force Python to release the channel object
+            self.channel = None
+            self.stub = None
+            time.sleep(0.2)  # Give OS time to close socket
         
         # Try to find and connect to leader
         if self._reconnect_to_leader():
             print(f"✓ Successfully reconnected to {self.server_address}")
+            
+            # Verify connection works with a quick test
+            try:
+                test_request = raft_node_pb2.GetLeaderRequest()
+                test_response = self.stub.GetLeaderInfo(test_request, timeout=2.0)
+                if test_response.is_leader:
+                    print(f"✓ Verified connection to LEADER node {test_response.leader_id}")
+                else:
+                    print(f"⚠️  Connected to {test_response.state} node, not leader")
+            except:
+                pass
             
             # Show cluster status after reconnection
             self.do_status("")
@@ -1036,7 +1090,8 @@ class ChatClient(cmd.Cmd):
                 recent_message_count=5
             )
             
-            response = self.stub.GetSmartReply(request, timeout=10.0)
+            # INCREASED timeout from 10s to 20s for Gemini API
+            response = self.stub.GetSmartReply(request, timeout=20.0)
             
             if response.success and response.suggestions:
                 self.last_smart_replies = response.suggestions  # Store for later
@@ -1048,8 +1103,65 @@ class ChatClient(cmd.Cmd):
             else:
                 print("No suggestions available")
                 
+        except grpc.RpcError as e:
+            if e.code() == grpc.StatusCode.DEADLINE_EXCEEDED:
+                print("⏱️  Smart reply timed out. The LLM server might be slow.")
+                print("    Try again or check if the LLM server is running:")
+                print("    python llm_server/llm_server.py")
+            else:
+                print(f"Error: {e.code()}")
         except Exception as e:
-            print(f"Error: {e}")
+            print(f"Error: {str(e)[:80]}")
+
+    def do_ask(self, arg):
+        """Ask AI a question: ask <your question>"""
+        if not self.token:
+            print("Please login first")
+            return
+        
+        if not arg.strip():
+            print("Usage: ask <your question>")
+            print("Example: ask What is the capital of France?")
+            return
+        
+        question = arg.strip()
+        
+        try:
+            print(f"🤖 Asking AI: {question[:60]}...")
+            
+            request = raft_node_pb2.LLMRequest(
+                token=self.token,
+                query=question,
+                context=[]  # Empty context for now
+            )
+            
+            # INCREASED timeout from 30s to 60s for Gemini API
+            response = self.stub.GetLLMAnswer(request, timeout=60.0)
+            
+            if response.success:
+                print("\n" + "="*60)
+                print("🤖 AI ANSWER")
+                print("="*60)
+                print(f"\n{response.answer}\n")
+                print("="*60)
+            else:
+                print(f"❌ {response.answer}")
+                
+        except grpc.RpcError as e:
+            if e.code() == grpc.StatusCode.DEADLINE_EXCEEDED:
+                print("⏱️  AI request timed out after 60 seconds.")
+                print("    The Gemini API might be slow or overloaded.")
+                print("    Try a simpler question or check your internet connection.")
+                print("    Example: ask What is 2+2?")
+            else:
+                print(f"Error: {e.code()}")
+        except Exception as e:
+            error_msg = str(e)
+            if "LLM service is not available" in error_msg:
+                print("❌ LLM server is not running.")
+                print("    Start it with: python llm_server/llm_server.py")
+            else:
+                print(f"Error: {error_msg[:80]}")
 
     def do_suggest(self, arg):
         """Get context-aware suggestions or send numbered suggestion"""
@@ -1083,7 +1195,8 @@ class ChatClient(cmd.Cmd):
                 context_message_count=5
             )
             
-            response = self.stub.GetContextSuggestions(request, timeout=8.0)
+            # INCREASED timeout from 8s to 20s
+            response = self.stub.GetContextSuggestions(request, timeout=20.0)
             
             if response.success:
                 if response.suggestions:
@@ -1102,8 +1215,13 @@ class ChatClient(cmd.Cmd):
             else:
                 print("No suggestions available")
                 
+        except grpc.RpcError as e:
+            if e.code() == grpc.StatusCode.DEADLINE_EXCEEDED:
+                print("⏱️  Suggestions timed out. Try again or check the LLM server.")
+            else:
+                print(f"Error: {e.code()}")
         except Exception as e:
-            print(f"Error: {e}")
+            print(f"Error: {str(e)[:80]}")
     
     def do_summarize(self, arg):
         """Summarize conversation: summarize [message_count]"""
@@ -1132,8 +1250,8 @@ class ChatClient(cmd.Cmd):
                 message_count=count
             )
             
-            # Increased timeout to 15 seconds for summarization
-            response = self.stub.SummarizeConversation(request, timeout=15.0)
+            # INCREASED timeout from 15s to 30s for summarization
+            response = self.stub.SummarizeConversation(request, timeout=30.0)
             
             if response.success:
                 print("\n" + "="*60)
@@ -1287,6 +1405,59 @@ class ChatClient(cmd.Cmd):
         except Exception as e:
             print(f"Error: {e}")
     
+    def do_help_all(self, arg):
+        """Show all available commands with categories"""
+        print("\n" + "="*60)
+        print("AUTHENTICATION COMMANDS")
+        print("="*60)
+        print("  signup                    - Create new account")
+        print("  login <username>          - Login to account")
+        print("  logout                    - Logout")
+        
+        print("\n" + "="*60)
+        print("CHANNEL COMMANDS")
+        print("="*60)
+        print("  channels                  - List all channels")
+        print("  create_channel <name> [d] - Create new channel (you become admin)")
+        print("  join <channel>            - Join a channel")
+        print("  send <message>            - Send message to current channel")
+        print("  history [limit]           - Show message history")
+        
+        print("\n" + "="*60)
+        print("CHANNEL ADMIN COMMANDS (Admins Only)")
+        print("="*60)
+        print("  add_user <username>       - Add user to current channel")
+        print("  remove_user <username>    - Remove user from current channel")
+        print("  Note: You become admin when you create a channel")
+        
+        print("\n" + "="*60)
+        print("DIRECT MESSAGE COMMANDS")
+        print("="*60)
+        print("  dm <username>             - Start DM conversation")
+        print("  conversations             - List all your DM conversations")
+        print("  send <message>            - Send DM (when in DM mode)")
+        print("  back                      - Return to channel mode")
+        
+        print("\n" + "="*60)
+        print("FILE TRANSFER COMMANDS")
+        print("="*60)
+        print("  upload <filepath> [desc]  - Upload file to channel/DM")
+        print("  download <file_id> [name] - Download file by ID")
+        print("  files                     - List files in current channel")
+        
+        print("\n" + "="*60)
+        print("USER COMMANDS")
+        print("="*60)
+        print("  users                     - Show all users (online/offline)")
+        
+        print("\n" + "="*60)
+        print("AI/LLM COMMANDS")
+        print("="*60)
+        print("  smart_reply               - Get AI reply suggestions")
+        print("  summarize [limit]         - Summarize conversation")
+        print("  ask <question>            - Ask AI a question")
+        print("  suggest [text]         - Get context-aware completions")  # NEW!
+        
     def do_help_all(self, arg):
         """Show all available commands with categories"""
         print("\n" + "="*60)

@@ -8,6 +8,7 @@ import uuid
 from typing import List, Dict
 import google.generativeai as genai
 import datetime
+import time
 
 # Add parent directory to path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -144,7 +145,7 @@ class LLMServicer(llm_service_pb2_grpc.LLMServiceServicer):
             )
     
     def _generate_response(self, query: str, context_list: List[str]) -> str:
-        """Generate response using Gemini 2.0 Flash"""
+        """Generate response using Gemini 2.0 Flash with retry"""
         try:
             if context_list:
                 # Include recent context for better responses
@@ -154,17 +155,61 @@ class LLMServicer(llm_service_pb2_grpc.LLMServiceServicer):
 {context_str}
 
 User's question: {query}
-
-Provide a helpful, informative response that considers the conversation context:"""
+Do not give more than 2 sentences in your response.
+Provide a helpful, short, informative response that considers the conversation context:"""
             else:
-                prompt = query
+                prompt = f"{query}\n\nProvide a short, helpful answer in 2 sentences or less."
             
-            response = self.model.generate_content(prompt)
-            return response.text.strip()
+            # Retry up to 3 times with exponential backoff
+            max_retries = 3
+            for attempt in range(max_retries):
+                try:
+                    response = self.model.generate_content(
+                        prompt,
+                        generation_config={
+                            'temperature': 0.7,
+                            'max_output_tokens': 150,
+                        }
+                    )
+                    
+                    # CRITICAL FIX: Check if response has valid text before accessing
+                    if not response or not response.candidates:
+                        logger.warning(f"Empty response from Gemini API (attempt {attempt+1})")
+                        if attempt < max_retries - 1:
+                            time.sleep(2 ** attempt)
+                            continue
+                        return "I'm having trouble generating a response. Please try rephrasing your question."
+                    
+                    # Check if response was blocked
+                    if response.candidates[0].finish_reason not in [1, 2]:  # 1=STOP, 2=MAX_TOKENS
+                        logger.warning(f"Response blocked: {response.candidates[0].finish_reason}")
+                        return "I cannot provide a response to that query. Please try asking something else."
+                    
+                    # Safely get text
+                    try:
+                        return response.text.strip()
+                    except AttributeError:
+                        # Fallback: try to get text from parts
+                        if response.candidates[0].content.parts:
+                            return response.candidates[0].content.parts[0].text.strip()
+                        else:
+                            logger.warning("No text in response parts")
+                            if attempt < max_retries - 1:
+                                time.sleep(2 ** attempt)
+                                continue
+                            return "I received an empty response. Please try again."
+                    
+                except Exception as e:
+                    if attempt < max_retries - 1:
+                        wait_time = 2 ** attempt  # 1s, 2s, 4s
+                        logger.warning(f"Gemini API retry {attempt+1}/{max_retries} after {wait_time}s: {str(e)[:80]}")
+                        time.sleep(wait_time)
+                    else:
+                        raise
             
         except Exception as e:
-            logger.error(f"Gemini API error: {e}")
-            return "I'm having trouble connecting to the AI service. Please check your API key and internet connection."
+            logger.error(f"Gemini API error after retries: {e}")
+            return "I'm having trouble connecting to the AI service right now. The API might be overloaded. Please try again in a moment."
     
     def _generate_smart_replies(self, messages: List) -> List[str]:
         """Generate smart reply suggestions using Gemini"""
@@ -184,7 +229,26 @@ Generate exactly 3 short, natural reply suggestions. Each suggestion should be:
 Format: Just list the 3 suggestions, one per line, no numbering or bullets."""
             
             response = self.model.generate_content(prompt)
-            suggestions = [s.strip() for s in response.text.strip().split('\n') if s.strip()]
+            
+            # CRITICAL FIX: Check response validity
+            if not response or not response.candidates:
+                logger.warning("Empty smart reply response")
+                return ["I agree", "That's interesting", "Tell me more"]
+            
+            if response.candidates[0].finish_reason not in [1, 2]:
+                logger.warning(f"Smart reply blocked: {response.candidates[0].finish_reason}")
+                return ["Sounds good", "I understand", "Interesting"]
+            
+            # Safely extract text
+            try:
+                text = response.text.strip()
+            except AttributeError:
+                if response.candidates[0].content.parts:
+                    text = response.candidates[0].content.parts[0].text.strip()
+                else:
+                    return ["I agree", "That makes sense", "Good point"]
+            
+            suggestions = [s.strip() for s in text.split('\n') if s.strip()]
             
             # Clean up any numbering or bullets
             cleaned = []
@@ -221,7 +285,29 @@ Key Points:
 - point 3"""
             
             response = self.model.generate_content(prompt)
-            text = response.text.strip()
+            
+            # CRITICAL FIX: Validate response
+            if not response or not response.candidates:
+                logger.warning("Empty summary response")
+                participants = list(set([m.sender for m in messages]))
+                return (f"Conversation with {len(messages)} messages", 
+                       [f"{len(messages)} messages exchanged"])
+            
+            if response.candidates[0].finish_reason not in [1, 2]:
+                participants = list(set([m.sender for m in messages]))
+                return (f"Discussion between {', '.join(participants)}", 
+                       [f"{len(messages)} messages", "Active conversation"])
+            
+            # Safely extract text
+            try:
+                text = response.text.strip()
+            except AttributeError:
+                if response.candidates[0].content.parts:
+                    text = response.candidates[0].content.parts[0].text.strip()
+                else:
+                    participants = list(set([m.sender for m in messages]))
+                    return (f"Conversation between {', '.join(participants)}", 
+                           [f"{len(messages)} messages"])
             
             # Parse summary and key points
             summary = ""
@@ -315,7 +401,32 @@ TOPICS:
 - topic 2"""
             
             response = self.model.generate_content(prompt)
-            text = response.text.strip()
+            
+            # CRITICAL FIX: Validate response
+            if not response or not response.candidates:
+                logger.warning("Empty context suggestions response")
+                return (
+                    ["continue the conversation", "ask for details", "share thoughts"],
+                    ["discussion topic"]
+                )
+            
+            if response.candidates[0].finish_reason not in [1, 2]:
+                return (
+                    ["continue the thought", "ask a question", "share more"],
+                    ["current topic"]
+                )
+            
+            # Safely extract text
+            try:
+                text = response.text.strip()
+            except AttributeError:
+                if response.candidates[0].content.parts:
+                    text = response.candidates[0].content.parts[0].text.strip()
+                else:
+                    return (
+                        ["continue the conversation", "ask for clarification"],
+                        ["related subjects"]
+                    )
             
             suggestions = []
             topics = []
