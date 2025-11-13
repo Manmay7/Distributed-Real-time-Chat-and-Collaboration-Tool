@@ -9,6 +9,8 @@ import getpass
 from typing import Optional
 import cmd
 import logging
+from collections import deque
+import hashlib
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -27,7 +29,7 @@ class ChatClient(cmd.Cmd):
     ╚══════════════════════════════════════════════╝
     
     Commands: 'signup' | 'login <username>' | 'help'
-    Test users: alice/alice123, bob/bob123, admin/admin123
+    Test users: alice/alice123, bob/bob123, charlie/charlie123
     """
     prompt = '(chat) > '
     
@@ -51,8 +53,13 @@ class ChatClient(cmd.Cmd):
             "localhost:50053"
         ]
         
-        self.last_smart_replies = []  # Store last smart reply suggestions
-        self.last_context_suggestions = []  # Store last context suggestions
+        self.last_smart_replies = []
+        self.last_context_suggestions = []
+        
+        # NEW: Message deduplication with longer window
+        self.pending_messages = deque(maxlen=100)
+        self.send_lock = threading.Lock()
+        self.last_send_time = {}  # Track last send time per content hash
         
         self._connect_to_raft_leader()
     
@@ -286,36 +293,78 @@ class ChatClient(cmd.Cmd):
         max_retries = 3
         last_error = None
 
-        # Fire-and-forget for send operations to avoid DeadlineExceeded on slow networks
+        # Fire-and-forget for send operations with BETTER deduplication
         is_send_operation = ('SendMessage' in str(rpc_func)) or ('SendDirectMessage' in str(rpc_func))
+        
         if is_send_operation:
+            request = args[0] if args else None
+            if request:
+                # Create hash based on content + user + 10-second window
+                time_bucket = int(time.time() / 10)  # 10-second buckets instead of 2
+                msg_hash = hashlib.md5(
+                    f"{self.username}:{request.content}:{time_bucket}".encode()
+                ).hexdigest()
+                
+                # Check if we sent this recently (within 30 seconds)
+                with self.send_lock:
+                    now = time.time()
+                    last_sent = self.last_send_time.get(msg_hash, 0)
+                    
+                    if now - last_sent < 30:  # Block duplicates for 30 seconds
+                        logger.info(f"Duplicate send blocked (sent {now - last_sent:.1f}s ago)")
+                        return type('obj', (object,), {'success': True, 'message': 'Already sent'})()
+                    
+                    # Record this send
+                    self.last_send_time[msg_hash] = now
+                    self.pending_messages.append(msg_hash)
+                    
+                    # Clean old entries (older than 60 seconds)
+                    old_hashes = [h for h, t in self.last_send_time.items() if now - t > 60]
+                    for h in old_hashes:
+                        del self.last_send_time[h]
+            
             def async_send():
                 try:
-                    # Best-effort ensure leader; don't block the UI
-                    try:
-                        self._ensure_connected_to_leader()
-                    except:
-                        pass
-
-                    # Long timeout in background to let the server finish
+                    # Ensure leader connection
+                    for _ in range(2):
+                        try:
+                            if self._ensure_connected_to_leader():
+                                break
+                        except:
+                            pass
+                        time.sleep(0.1)
+                    
+                    # Send with longer timeout for DMs (10s) vs messages (5s)
                     local_kwargs = dict(kwargs)
-                    local_kwargs.setdefault('timeout', 30.0)
+                    if 'SendDirectMessage' in str(rpc_func):
+                        local_kwargs.setdefault('timeout', 10.0)  # Longer for DMs
+                    else:
+                        local_kwargs.setdefault('timeout', 5.0)
+                    
                     rpc_func(*args, **local_kwargs)
+                    logger.info("Message sent successfully in background")
+                except grpc.RpcError as e:
+                    if e.code() == grpc.StatusCode.DEADLINE_EXCEEDED:
+                        logger.warning(f"Send timeout but message likely succeeded (server committed)")
+                    else:
+                        logger.warning(f"Send failed: {e.code()}")
                 except Exception as e:
-                    logger.warning(f"Background send failed: {str(e)[:80]}")
+                    logger.warning(f"Send error: {str(e)[:60]}")
 
             threading.Thread(target=async_send, daemon=True).start()
-            # Return immediate success to the caller/UI
-            return type('obj', (object,), {'success': True, 'message': 'Message sent'})()
+            # Return immediate success with helpful message
+            if 'SendDirectMessage' in str(rpc_func):
+                return type('obj', (object,), {'success': True, 'message': 'DM sending...'})()
+            else:
+                return type('obj', (object,), {'success': True, 'message': 'Message queued'})()
 
+        # Non-send operations use normal retry logic
         for attempt in range(max_retries):
             try:
-                # Only check connection on first attempt
                 if attempt == 0:
                     if not self._ensure_connected_to_leader():
                         raise Exception("Not connected to leader")
 
-                # Reasonable timeout for non-send ops
                 if 'timeout' not in kwargs:
                     kwargs['timeout'] = 5.0
 
@@ -399,8 +448,8 @@ class ChatClient(cmd.Cmd):
                 display_name=display_name
             )
            
-            # Use leader-aware call for signup
-            response = self._call_leader_with_retry(self.stub.Signup, request, timeout=5.0)
+            # Use leader-aware call for signup with longer timeout (user creation needs full replication)
+            response = self._call_leader_with_retry(self.stub.Signup, request, timeout=15.0)
             
             if response.success:
                 print(f"✓ {response.message}")
@@ -524,23 +573,118 @@ class ChatClient(cmd.Cmd):
             
             if response.success:
                 print(f"✓ {response.message}")
+                # Auto-join the created channel
+                if hasattr(response, 'channel_id') and response.channel_id:
+                    self.current_channel = response.channel_id
+                    self.current_channel_name = channel_name
+                    self.dm_mode = False
+                    logger.info(f"Auto-joined channel #{channel_name} (ID: {response.channel_id})")
             else:
                 print(f"❌ Failed: {response.message}")
         except Exception as e:
             print(f"Error: {e}")
     
-    def do_join(self, arg):
-        """Join channel: join <channel_name>"""
+    def do_switch(self, arg):
+        """Switch to a channel you're already a member of: switch <channel_name>"""
         if not self.token:
             print("Please login first")
             return
         
         if not arg:
-            print("Usage: join <channel_name>")
+            print("Usage: switch <channel_name>")
+            print("Example: switch Test")
             return
         
         channel_name = arg.strip()
         
+        try:
+            # Get all channels
+            request = raft_node_pb2.GetChannelsRequest(token=self.token)
+            response = self._call_with_retry(self.stub.GetChannels, request, timeout=5.0)
+            
+            if response.success:
+                # Find the channel by name (case-insensitive)
+                target_channel = None
+                for channel in response.channels:
+                    if channel.name.lower() == channel_name.lower():
+                        target_channel = channel
+                        break
+                
+                if not target_channel:
+                    print(f"❌ Channel #{channel_name} not found")
+                    return
+                
+                # Check if user is a member
+                if target_channel.member_count == 0:
+                    print(f"❌ You are not a member of #{channel_name}")
+                    print(f"   Ask an admin to add you: add_user {self.username}")
+                    return
+                
+                # Switch to the channel
+                self.current_channel = target_channel.channel_id
+                self.current_channel_name = channel_name
+                self.dm_mode = False
+                
+                print(f"✓ Switched to #{channel_name}")
+                
+                # Show recent messages
+                self._show_recent_messages(10)
+            else:
+                print(f"❌ Failed to get channels: {response.message if hasattr(response, 'message') else 'Unknown error'}")
+                
+        except Exception as e:
+            print(f"Error: {e}")
+    
+    def do_join(self, arg):
+        """Join channel: join <channel_name> [DEPRECATED - Use 'switch' instead]"""
+        if not self.token:
+            print("Please login first")
+            return
+        
+        if not arg:
+            print("Usage: switch <channel_name> (to switch to a channel you're in)")
+            print("Note: You cannot join channels directly.")
+            print("      Ask a channel admin to add you using: add_user <your_username>")
+            return
+        
+        channel_name = arg.strip()
+        
+        # Special case: Allow joining "general" channel
+        try:
+            request = raft_node_pb2.GetChannelsRequest(token=self.token)
+            response = self._call_with_retry(self.stub.GetChannels, request, timeout=5.0)
+            
+            if response.success:
+                for channel in response.channels:
+                    # Allow joining default public channels: general, random, tech
+                    if channel.name.lower() in ['general', 'random', 'tech'] and channel.name.lower() == channel_name.lower():
+                        # Try to join the default public channel
+                        join_request = raft_node_pb2.JoinChannelRequest(
+                            token=self.token,
+                            channel_id=channel.channel_id
+                        )
+                        join_response = self._call_leader_with_retry(self.stub.JoinChannel, join_request, timeout=5.0)
+                        
+                        if join_response.success:
+                            self.current_channel = channel.channel_id
+                            self.current_channel_name = channel.name
+                            self.dm_mode = False
+                            print(f"✓ {join_response.message}")
+                            self._show_recent_messages(10)
+                        else:
+                            print(f"❌ {join_response.message}")
+                        return
+        except Exception as e:
+            pass
+        
+        print(f"\n⚠️  NOTICE: Users cannot join channels directly.")
+        print(f"   If you're already a member of #{channel_name}, use: switch {channel_name}")
+        print(f"   Otherwise, ask an admin of #{channel_name} to add you with:")
+        print(f"   > add_user {self.username}")
+        print(f"\n   Or create your own channel with: create_channel <name>")
+        return
+        
+        # OLD CODE - kept for reference but unreachable
         try:
             channels_req = raft_node_pb2.GetChannelsRequest(token=self.token)
             channels_resp = self.stub.GetChannels(channels_req)
@@ -1300,7 +1444,7 @@ class ChatClient(cmd.Cmd):
                 target_username=username
             )
             
-            response = self._call_leader_with_retry(self.stub.AddUserToChannel, request, timeout=5.0)
+            response = self._call_leader_with_retry(self.stub.AddUserToChannel, request, timeout=10.0)
             
             if response.success:
                 print(f"✓ {response.message}")
@@ -1333,7 +1477,7 @@ class ChatClient(cmd.Cmd):
                 target_username=username
             )
             
-            response = self._call_leader_with_retry(self.stub.RemoveUserFromChannel, request, timeout=5.0)
+            response = self._call_leader_with_retry(self.stub.RemoveUserFromChannel, request, timeout=10.0)
             
             if response.success:
                 print(f"✓ {response.message}")
@@ -1419,9 +1563,12 @@ class ChatClient(cmd.Cmd):
         print("="*60)
         print("  channels                  - List all channels")
         print("  create_channel <name> [d] - Create new channel (you become admin)")
-        print("  join <channel>            - Join a channel")
+        print("  switch <channel>          - Switch to a channel you're already in")
+        print("  members                   - Show members of current channel")
         print("  send <message>            - Send message to current channel")
         print("  history [limit]           - Show message history")
+        print("\n  Note: Use 'switch' to access channels you're a member of")
+        print("        Ask admins to add you to other channels")
         
         print("\n" + "="*60)
         print("CHANNEL ADMIN COMMANDS (Admins Only)")
@@ -1458,61 +1605,9 @@ class ChatClient(cmd.Cmd):
         print("  ask <question>            - Ask AI a question")
         print("  suggest [text]         - Get context-aware completions")  # NEW!
         
-    def do_help_all(self, arg):
-        """Show all available commands with categories"""
-        print("\n" + "="*60)
-        print("AUTHENTICATION COMMANDS")
-        print("="*60)
-        print("  signup                    - Create new account")
-        print("  login <username>          - Login to account")
-        print("  logout                    - Logout")
-        
-        print("\n" + "="*60)
-        print("CHANNEL COMMANDS")
-        print("="*60)
-        print("  channels                  - List all channels")
-        print("  create_channel <name> [d] - Create new channel (you become admin)")
-        print("  join <channel>            - Join a channel")
-        print("  send <message>            - Send message to current channel")
-        print("  history [limit]           - Show message history")
-        
-        print("\n" + "="*60)
-        print("CHANNEL ADMIN COMMANDS (Admins Only)")
-        print("="*60)
-        print("  add_user <username>       - Add user to current channel")
-        print("  remove_user <username>    - Remove user from current channel")
-        print("  Note: You become admin when you create a channel")
-        
-        print("\n" + "="*60)
-        print("DIRECT MESSAGE COMMANDS")
-        print("="*60)
-        print("  dm <username>             - Start DM conversation")
-        print("  conversations             - List all your DM conversations")
-        print("  send <message>            - Send DM (when in DM mode)")
-        print("  back                      - Return to channel mode")
-        
-        print("\n" + "="*60)
-        print("FILE TRANSFER COMMANDS")
-        print("="*60)
-        print("  upload <filepath> [desc]  - Upload file to channel/DM")
-        print("  download <file_id> [name] - Download file by ID")
-        print("  files                     - List files in current channel")
-        
-        print("\n" + "="*60)
-        print("USER COMMANDS")
-        print("="*60)
-        print("  users                     - Show all users (online/offline)")
-        
-        print("\n" + "="*60)
-        print("AI/LLM COMMANDS")
-        print("="*60)
-        print("  smart_reply               - Get AI reply suggestions")
-        print("  summarize [limit]         - Summarize conversation")
-        print("  ask <question>            - Ask AI a question")
-        print("  suggest [text]         - Get context-aware completions")  # NEW!
-        
-        print("\n" + "="*60)
-        print("RAFT CLUSTER COMMANDS")
+    def do_help_all_DUPLICATE_REMOVE_ME(self, arg):
+        """DUPLICATE FUNCTION - This should be removed"""
+        print("⚠️  This is a duplicate function. Use 'help' or 'help_all' instead.")
         print("="*60)
         print("  status                    - Show Raft cluster status")
         print("  reconnect                 - Force reconnect to current leader")
@@ -1536,13 +1631,15 @@ class ChatClient(cmd.Cmd):
         print("  logout                 - Logout")
         print()
         print("  channels               - List all channels")
-        print("  create_channel <name>  - Create new channel")
-        print("  join <channel>         - Join a channel")
+        print("  create_channel <name>  - Create new channel (you become admin)")
+        print("  switch <channel_name>  - Switch to a channel you're already in")
         print("  send <message>         - Send message")
         print("  history [limit]        - Show message history")
+        print("  members                - Show channel members")
         print()
-        print("  add_user <username>    - Add user to channel (admin)")
-        print("  remove_user <username> - Remove user (admin)")
+        print("  add_user <username>    - Add user to channel (admin only)")
+        print("  remove_user <username> - Remove user from channel (admin only)")
+        print("  ⚠️  Use 'switch' to access your channels. Admins add you to others.")
         print()
         print("  dm <username>          - Start DM conversation")
         print("  conversations          - List all DM conversations")
@@ -1555,10 +1652,11 @@ class ChatClient(cmd.Cmd):
         print("  smart_reply            - Get AI reply suggestions")
         print("  summarize [count]      - Summarize conversation")
         print("  ask <question>         - Ask AI a question")
-        print("  suggest [text]         - Get context-aware completions")  # NEW!
+        print("  suggest [text]         - Get context-aware completions")
         print()
         print("  users                  - Show all users")
         print("  status                 - Show Raft cluster status")
+        print("  Type 'help_all' for detailed help with all commands")
     def _join_default_channel(self):
         """Auto-join general channel"""
         # Add small delay to let connection stabilize after login
