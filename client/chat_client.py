@@ -172,6 +172,47 @@ class ChatClient(cmd.Cmd):
                         self.channel = test_channel
                         self.stub = test_stub
                         self.server_address = node_addr
+                        
+                        # RECOVERY FIX: Test if token is still valid on new node
+                        token_valid = False
+                        remembered_username = self.username
+                        remembered_channel = self.current_channel_name
+                        
+                        if self.token:
+                            try:
+                                test_req = raft_node_pb2.GetOnlineUsersRequest(token=self.token)
+                                test_resp = test_stub.GetOnlineUsers(test_req, timeout=2.0)
+                                token_valid = test_resp.success
+                                
+                                if not token_valid and remembered_username:
+                                    # Auto-logout and prompt for re-login
+                                    print("⚠️  Session expired on new leader")
+                                    print("    Auto-logging out...")
+                                    
+                                    # Clear local session
+                                    self.token = None
+                                    self.username = None
+                                    self.current_channel = None
+                                    # Keep current_channel_name for restoration
+                                    
+                                    print(f"\n🔑 Please re-login: login {remembered_username}")
+                            except:
+                                pass
+                        
+                        # Try to restore current_channel after reconnect
+                        if token_valid and self.current_channel_name and not self.current_channel:
+                            try:
+                                ch_req = raft_node_pb2.GetChannelsRequest(token=self.token)
+                                ch_resp = test_stub.GetChannels(ch_req, timeout=3.0)
+                                if ch_resp.success:
+                                    for ch in ch_resp.channels:
+                                        if ch.name.lower() == self.current_channel_name.lower():
+                                            self.current_channel = ch.channel_id
+                                            print(f"✓ Restored channel #{self.current_channel_name}")
+                                            break
+                            except:
+                                pass  # Silent fail - user can rejoin manually
+                        
                         return True
                     
                     test_channel.close()
@@ -489,7 +530,28 @@ class ChatClient(cmd.Cmd):
                 print(f"  Display: {response.user_info.display_name}")
                 print(f"  Connected to: {self.server_address}")
                 
-                self._join_default_channel()
+                # Try to restore previous channel if we had one before logout
+                restored = False
+                if self.current_channel_name and self.current_channel_name != "general":
+                    try:
+                        ch_req = raft_node_pb2.GetChannelsRequest(token=self.token)
+                        ch_resp = self.stub.GetChannels(ch_req, timeout=3.0)
+                        if ch_resp.success:
+                            for ch in ch_resp.channels:
+                                if ch.name.lower() == self.current_channel_name.lower():
+                                    # Check if we're a member
+                                    for member in ch.members:
+                                        if member.username == username:
+                                            self.current_channel = ch.channel_id
+                                            print(f"✓ Restored channel #{self.current_channel_name}")
+                                            restored = True
+                                            break
+                                    break
+                    except:
+                        pass
+                
+                if not restored:
+                    self._join_default_channel()
             else:
                 print(f"❌ Login failed: {response.message}")
         except Exception as e:
@@ -510,9 +572,24 @@ class ChatClient(cmd.Cmd):
                 self.token = None
                 self.username = None
                 self.current_channel = None
+                self.current_channel_name = None
+                self.dm_mode = False
+            else:
+                print("⚠️  Logout failed on server, but clearing local session")
+                self.token = None
+                self.username = None
+                self.current_channel = None
+                self.current_channel_name = None
                 self.dm_mode = False
         except Exception as e:
-            print(f"Error: {e}")
+            # Even if server logout fails, clear local session
+            print(f"⚠️  Server error: {str(e)[:50]}")
+            print("    Clearing local session anyway")
+            self.token = None
+            self.username = None
+            self.current_channel = None
+            self.current_channel_name = None
+            self.dm_mode = False
     
     def do_channels(self, arg):
         """List all channels"""
@@ -631,9 +708,15 @@ class ChatClient(cmd.Cmd):
                 self._show_recent_messages(10)
             else:
                 print(f"❌ Failed to get channels: {response.message if hasattr(response, 'message') else 'Unknown error'}")
+                print("   Possible causes:")
+                print("   - Your session expired (try: logout then login)")
+                print("   - Token invalid on this node (already fixed in latest code)")
                 
+        except grpc.RpcError as e:
+            print(f"❌ Connection error: {e.code()}")
+            print("   Try: reconnect")
         except Exception as e:
-            print(f"Error: {e}")
+            print(f"❌ Error: {e}")
     
     def do_join(self, arg):
         """Join channel: join <channel_name> [DEPRECATED - Use 'switch' instead]"""
@@ -930,8 +1013,16 @@ class ChatClient(cmd.Cmd):
     
     def do_history(self, arg):
         """Show message history: history [limit]"""
-        if not self.token or not self.current_channel or self.dm_mode:
-            print("Join a channel first")
+        if not self.token:
+            print("Please login first")
+            return
+        
+        if self.dm_mode:
+            print("History only works in channels. Type 'back' to return to channel mode.")
+            return
+        
+        if not self.current_channel:
+            print("❌ Not in any channel. Try: switch general")
             return
         
         limit = 20
@@ -941,7 +1032,41 @@ class ChatClient(cmd.Cmd):
             except:
                 pass
         
-        self._show_recent_messages(limit)
+        # Try to get messages - auto-logout if token invalid
+        try:
+            request = raft_node_pb2.GetMessagesRequest(
+                token=self.token,
+                channel_id=self.current_channel,
+                limit=limit,
+                offset=0
+            )
+            response = self.stub.GetMessages(request, timeout=5.0)
+            
+            if not response.success:
+                # Token is invalid - auto-logout and prompt
+                print("❌ Your session is invalid on this server")
+                print("   Auto-logging out...")
+                self.token = None
+                self.username = None
+                self.current_channel = None
+                self.current_channel_name = None
+                print("\n🔑 Please login again: login alice")
+                return
+            
+            if response.messages:
+                print(f"\n📜 Recent Messages (last {limit}):")
+                print("-" * 50)
+                for msg in response.messages:
+                    timestamp = datetime.fromtimestamp(msg.timestamp / 1000).strftime("%H:%M")
+                    print(f"[{timestamp}] {msg.sender_name}: {msg.content}")
+                print("-" * 50)
+            else:
+                print("No messages yet. Be the first to say something!")
+        except grpc.RpcError as e:
+            print(f"❌ Connection error: {e.code()}")
+            print("   Try: reconnect")
+        except Exception as e:
+            print(f"❌ Error: {e}")
     
     def do_users(self, arg):
         """Show all users"""
@@ -951,7 +1076,7 @@ class ChatClient(cmd.Cmd):
         
         try:
             request = raft_node_pb2.GetOnlineUsersRequest(token=self.token)
-            response = self.stub.GetOnlineUsers(request)
+            response = self.stub.GetOnlineUsers(request, timeout=5.0)
             
             if response.success:
                 online_users = [u for u in response.users if u.status == "online"]
@@ -974,8 +1099,18 @@ class ChatClient(cmd.Cmd):
                 
                 print("-" * 50)
                 print(f"Total: {len(online_users)} online, {len(offline_users)} offline")
+            else:
+                error_msg = response.message if hasattr(response, 'message') and response.message else 'Token verification failed'
+                print(f"❌ Failed to get users: {error_msg}")
+                if not response.message or 'token' in error_msg.lower():
+                    print("   💡 Your session is invalid. Get a fresh token:")
+                    print("      logout")
+                    print("      login alice")
+        except grpc.RpcError as e:
+            print(f"❌ Connection error: {e.code()}")
+            print("   Try: reconnect")
         except Exception as e:
-            print(f"Error: {e}")
+            print(f"❌ Error: {e}")
     
     def do_reconnect(self, arg):
         """Force reconnect to current leader"""
@@ -1020,6 +1155,21 @@ class ChatClient(cmd.Cmd):
         print(f"Username: {self.username or 'Not logged in'}")
         if self.current_channel_name:
             print(f"Current channel: #{self.current_channel_name}")
+        
+        # Show message count if logged in and in a channel
+        if self.token and self.current_channel:
+            try:
+                req = raft_node_pb2.GetMessagesRequest(
+                    token=self.token,
+                    channel_id=self.current_channel,
+                    limit=100,
+                    offset=0
+                )
+                resp = self.stub.GetMessages(req, timeout=2.0)
+                if resp.success:
+                    print(f"Messages in #general: {len(resp.messages)}")
+            except:
+                pass
         
         # Check if current connection is alive
         current_connection_alive = False
@@ -1511,6 +1661,9 @@ class ChatClient(cmd.Cmd):
             
             if not response.success:
                 print("❌ Failed to get channel members")
+                print("   💡 Your session may be invalid. Get a fresh token:")
+                print("      logout")
+                print("      login alice")
                 return
             
             print(f"\n👥 Members of #{self.current_channel_name}")
@@ -1741,20 +1894,24 @@ class ChatClient(cmd.Cmd):
                 limit=limit,
                 offset=0
             )
-            response = self.stub.GetMessages(request)
+            response = self.stub.GetMessages(request, timeout=5.0)
             
-            if response.success:
-                if response.messages:
-                    print(f"\n📜 Recent Messages (last {limit}):")
-                    print("-" * 50)
-                    for msg in response.messages:
-                        timestamp = datetime.fromtimestamp(msg.timestamp / 1000).strftime("%H:%M")
-                        print(f"[{timestamp}] {msg.sender_name}: {msg.content}")
-                    print("-" * 50)
-                else:
-                    print("No messages yet. Be the first to say something!")
+            if not response.success:
+                print("⚠️  Could not fetch messages (session may be invalid)")
+                return
+            
+            if response.messages:
+                print(f"\n📜 Recent Messages (last {limit}):")
+                print("-" * 50)
+                for msg in response.messages:
+                    timestamp = datetime.fromtimestamp(msg.timestamp / 1000).strftime("%H:%M")
+                    print(f"[{timestamp}] {msg.sender_name}: {msg.content}")
+                print("-" * 50)
+                print(f"Total: {len(response.messages)} messages")
+            else:
+                print("No messages yet. Be the first to say something!")
         except Exception as e:
-            print(f"Error: {e}")
+            print(f"Error: {str(e)[:60]}")
     
     def emptyline(self):
         """Don't repeat last command on empty line"""
@@ -1781,6 +1938,7 @@ def main():
     try:
         client = ChatClient(args.server)
         print("\n✓ Ready! Type 'login <username>' or 'signup' to begin\n")
+        sys.stdout.flush()  # Force flush output buffer
         client.cmdloop()
     except KeyboardInterrupt:
         print("\n\nGoodbye!")

@@ -426,9 +426,11 @@ class RaftNode(raft_node_pb2_grpc.RaftNodeServicer):
     def _init_default_data(self):
         """Initialize default channels and test users"""
         # First create users
+        # CRITICAL: Use username as user_id for default users (not UUID)
+        # This ensures all nodes use the same user IDs
         user_ids = {}
         for username, password in [("alice", "alice123"), ("bob", "bob123"), ("charlie", "charlie123")]:
-            user_id = str(uuid.uuid4())
+            user_id = username  # Use username as ID for consistency across nodes
             self.users[username] = {
                 "id": user_id,
                 "username": username,
@@ -442,8 +444,10 @@ class RaftNode(raft_node_pb2_grpc.RaftNodeServicer):
             user_ids[username] = user_id
         
         # Create default public channels - all users are members and admins
+        # CRITICAL: Use channel name as ID for default channels (not UUID)
+        # This ensures all nodes use the same channel IDs
         for channel_name in ["general", "random", "tech"]:
-            channel_id = str(uuid.uuid4())
+            channel_id = channel_name  # Use name as ID for consistency across nodes
             
             # All default channels: public, all users are members AND admins
             self.channels[channel_id] = {
@@ -699,23 +703,99 @@ class RaftNode(raft_node_pb2_grpc.RaftNodeServicer):
                 for dm in self.direct_messages[-3:]:
                     logger.debug(f"  DM: {dm.get('sender_name')} → {dm.get('recipient_name')}: {dm.get('content')[:30]}")
             
-            # CRITICAL FIX: Keep channels from disk/log, but clear memberships ONLY
-            # DON'T clear the channels dict itself - it contains channels that might not be in the log yet
-            logger.info("🗑️  Clearing transactional state (messages, DMs)...")
+            # CRITICAL FIX: PRESERVE loaded data - only clear if we're actually rebuilding
+            # Count what we already have from disk
+            existing_messages = sum(len(msgs) for msgs in self.channel_messages.values())
+            existing_dms = len(self.direct_messages)
+            existing_members = {cid: len(ch['members']) for cid, ch in self.channels.items()}
+            
+            logger.info(f"📊 Existing state before rebuild:")
+            logger.info(f"   Messages: {existing_messages}, DMs: {existing_dms}")
+            for cid, count in existing_members.items():
+                logger.info(f"   #{self.channels[cid]['name']}: {count} members")
+            
+            # CRITICAL FIX: ALWAYS check and apply new log entries
+            # The Raft log is the source of truth, not disk files
+            old_last_applied = self.last_applied
+            
+            logger.info("=" * 60)
+            logger.info(f"🔍 REBUILD ANALYSIS:")
+            logger.info(f"   commit_index: {self.commit_index}")
+            logger.info(f"   last_applied: {self.last_applied}")
+            logger.info(f"   log length: {len(self.log)}")
+            logger.info(f"   existing_messages: {existing_messages}")
+            logger.info(f"   existing_dms: {existing_dms}")
+            
+            # Check if we need a FULL rebuild (starting from scratch)
+            total_existing_members = sum(len(ch['members']) for ch in self.channels.values())
+            need_full_rebuild = (existing_messages == 0 and existing_dms == 0 and total_existing_members == 0)
+            
+            logger.info(f"   total_existing_members: {total_existing_members}")
+            logger.info(f"   need_full_rebuild: {need_full_rebuild}")
+            logger.info("=" * 60)
+            
+            # CRITICAL FIX: ALWAYS do full rebuild when becoming leader
+            # Disk data may be stale/inconsistent - Raft log is the only source of truth
+            logger.warning("🗑️  FORCING FULL REBUILD: Clearing all transactional state...")
+            
+            # First, log what's in the Raft log
+            logger.info("=" * 70)
+            logger.info(f"📋 RAFT LOG CONTENTS ({len(self.log)} entries):")
+            for i, entry in enumerate(self.log):
+                try:
+                    data = json.loads(entry.data.decode('utf-8'))
+                    content_preview = ""
+                    if entry.command == "SEND_MESSAGE":
+                        content_preview = f" - '{data.get('content', 'N/A')}'"
+                    elif entry.command == "SEND_DM":
+                        content_preview = f" - '{data.get('content', 'N/A')}'"
+                    logger.info(f"   [{i}] {entry.command}{content_preview} (term {entry.term})")
+                except:
+                    logger.info(f"   [{i}] {entry.command} (term {entry.term})")
+            logger.info("=" * 70)
+            
+            # CRITICAL: Clear ALL transactional state including channels
+            # Only keep default users (alice, bob, charlie) and default channels (general, random, tech)
             self.direct_messages = []
             self.channel_messages = {}
             
-            # Clear channel memberships (will be rebuilt from JOIN_CHANNEL commands)
-            logger.info("🗑️  Clearing channel memberships (will rebuild from log)...")
-            for channel in self.channels.values():
-                channel['members'] = set()  # Clear members but keep channel structure
+            # Remove ALL channels (they will be recreated from log)
+            logger.info("🗑️  Clearing ALL channels (will rebuild from CREATE_CHANNEL commands in log)...")
+            self.channels = {}
+            
+            # Reinitialize default channels only (these are not in the log)
+            user_ids = {username: username for username in ["alice", "bob", "charlie"]}
+            for channel_name in ["general", "random", "tech"]:
+                channel_id = channel_name
+                self.channels[channel_id] = {
+                    "id": channel_id,
+                    "name": channel_name,
+                    "description": f"Default {channel_name} channel (public)",
+                    "is_private": False,
+                    "members": set(),  # Will be populated by JOIN_CHANNEL from log
+                    "admins": set(user_ids.values()),
+                    "created_at": datetime.datetime.now(datetime.timezone.utc)
+                }
+                self.channel_messages[channel_id] = []
             
             # Force replay ALL committed entries from the beginning
             old_last_applied = self.last_applied
             self.last_applied = -1
             
-            logger.info(f"♻️  Replaying ALL {self.commit_index + 1} log entries...")
+            logger.info(f"♻️  Replaying {self.commit_index + 1} log entries (0 to {self.commit_index})...")
+            logger.info(f"   (Ignoring disk data - Raft log is source of truth)")
+            
             self._apply_committed_entries()
+            
+            final_messages = sum(len(msgs) for msgs in self.channel_messages.values())
+            final_dms = len(self.direct_messages)
+            final_members = sum(len(ch['members']) for ch in self.channels.values())
+            
+            logger.info(f"✅ FULL rebuild complete:")
+            logger.info(f"   Messages: {existing_messages} (disk) → {final_messages} (log)")
+            logger.info(f"   DMs: {existing_dms} (disk) → {final_dms} (log)")
+            logger.info(f"   Members: {total_existing_members} (disk) → {final_members} (log)")
+            logger.info(f"   last_applied: {old_last_applied} → {self.last_applied}")
             
             # Count final state
             new_actual_messages = sum(len(msgs) for msgs in self.channel_messages.values())
@@ -1195,18 +1275,25 @@ class RaftNode(raft_node_pb2_grpc.RaftNodeServicer):
             return
         
         # Apply the channel creation from log
+        member_ids = data['members']
+        admin_ids = data['admins']
+        
+        logger.info(f"📥 Creating channel #{channel_name} (ID: {channel_id})")
+        logger.info(f"   Initial members: {member_ids}")
+        logger.info(f"   Initial admins: {admin_ids}")
+        
         self.channels[channel_id] = {
             "id": channel_id,
             "name": channel_name,
             "description": data['description'],
             "is_private": data['is_private'],
-            "members": set(data['members']),
-            "admins": set(data['admins']),
+            "members": set(member_ids),
+            "admins": set(admin_ids),
             "created_at": datetime.datetime.now(datetime.timezone.utc)
         }
         self.channel_messages[channel_id] = []
         self._save_channels()  # ← Save immediately after creation!
-        logger.info(f"📥 Replicated channel: #{channel_name} with {len(data['members'])} initial members")
+        logger.info(f"✅ Replicated channel: #{channel_name} with {len(member_ids)} initial members")
     
     def _apply_join_channel(self, data: dict):
         """Apply channel join from log"""
@@ -1266,7 +1353,7 @@ class RaftNode(raft_node_pb2_grpc.RaftNodeServicer):
             # Check if message already exists
             for existing_msg in self.channel_messages[channel_id]:
                 if existing_msg.get('id') == message_id:
-                    logger.debug(f"Message {message_id} already exists, skipping duplicate")
+                    logger.info(f"⚠️  Message {message_id} already exists (content: '{data.get('content', 'N/A')}'), skipping duplicate")
                     return  # Skip duplicate
         
         # Initialize channel messages list if needed
@@ -1278,7 +1365,7 @@ class RaftNode(raft_node_pb2_grpc.RaftNodeServicer):
         # CRITICAL: Persist messages immediately after adding
         self._save_messages()
         
-        logger.debug(f"Applied SEND_MESSAGE: {data['sender_name']} → channel {channel_id}, total messages: {len(self.channel_messages[channel_id])}")
+        logger.info(f"✅ Applied SEND_MESSAGE: {data['sender_name']} → channel {channel_id}, content: '{data.get('content', 'N/A')}', total messages: {len(self.channel_messages[channel_id])}")
     
     def _apply_send_dm(self, data: dict):
         """Apply DM from log"""
@@ -1366,12 +1453,16 @@ class RaftNode(raft_node_pb2_grpc.RaftNodeServicer):
             # Generate JWT token
             token = self._generate_token(user["id"], username)
             
-            # Create session
+            # Create session (local cache for performance)
             self.sessions[token] = {
                 "user_id": user["id"],
                 "username": username,
                 "login_time": datetime.datetime.now(datetime.timezone.utc)
             }
+            
+            # CRITICAL FIX: Store active token in user record for cross-node validity
+            user["active_token"] = token
+            user["token_issued_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
             
             # CRITICAL FIX: Update user status LOCALLY (not through Raft)
             # Status changes are ephemeral and should not be in Raft log
@@ -1629,9 +1720,31 @@ class RaftNode(raft_node_pb2_grpc.RaftNodeServicer):
         return jwt.encode(payload, self.jwt_secret, algorithm="HS256")
     
     def _verify_token(self, token: str) -> Optional[dict]:
-        """Verify JWT token"""
+        """Verify JWT token - works across all nodes"""
         try:
-            return jwt.decode(token, self.jwt_secret, algorithms=["HS256"])
+            payload = jwt.decode(token, self.jwt_secret, algorithms=["HS256"])
+            username = payload.get("username")
+            
+            if not username or username not in self.users:
+                return None
+            
+            # CROSS-NODE FIX: Check if token matches user's active token
+            user = self.users[username]
+            if user.get("active_token") == token:
+                # Rebuild session cache if missing (happens after node restart/reconnect)
+                if token not in self.sessions:
+                    self.sessions[token] = {
+                        "user_id": user["id"],
+                        "username": username,
+                        "login_time": datetime.datetime.now(datetime.timezone.utc)
+                    }
+                return payload
+            
+            # Fallback: Check local session cache (for backward compatibility)
+            if token in self.sessions:
+                return payload
+            
+            return None
         except:
             return None
     
@@ -1647,8 +1760,9 @@ class RaftNode(raft_node_pb2_grpc.RaftNodeServicer):
             if request.token in self.sessions:
                 del self.sessions[request.token]
             
-            # Update status locally (not through Raft)
+            # CROSS-NODE FIX: Clear active_token from user record
             if username in self.users:
+                self.users[username]["active_token"] = None
                 self.users[username]["status"] = "offline"
                 self.online_users.discard(username)
                 self._save_users()
@@ -2233,7 +2347,9 @@ class RaftNode(raft_node_pb2_grpc.RaftNodeServicer):
                 total_count=len(members_list)
             )
 
-# UPDATE configuration: Add SEND_DM back for instant sends
+# UPDATE configuration: SEND_MESSAGE uses fast-commit for performance
+# Trade-off: Messages may be lost if leader crashes before replication completes
+# But system remains responsive even with minority of nodes available
 ALLOW_LOCAL_COMMIT = True
 ALLOW_LOCAL_COMMIT_COMMANDS = {"JOIN_CHANNEL", "LEAVE_CHANNEL", "SEND_MESSAGE", "SEND_DM", "UPLOAD_FILE", "CREATE_CHANNEL", "CREATE_USER"}
 REPLICATION_RETRIES = 200
