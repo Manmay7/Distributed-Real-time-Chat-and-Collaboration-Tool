@@ -369,4 +369,5 @@ message ChannelMembersResponse {
 message StatusResponse {
   bool success = 1;
   string message = 2;
+  string channel_id = 3;  // Optional: returned when creating a channel
 }

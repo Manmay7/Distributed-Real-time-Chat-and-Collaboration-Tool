@@ -5,25 +5,32 @@ package llm;
 service LLMService {
     rpc GetSmartReply(SmartReplyRequest) returns (SmartReplyResponse);
     rpc SummarizeConversation(SummarizeRequest) returns (SummarizeResponse);
+    rpc GetContextSuggestions(ContextRequest) returns (SuggestionsResponse);
 }
 
-
-message SmartReplyRequest {
-    string request_id = 1;
-    repeated ChatMessage recent_messages = 2;
-    string user_id = 3;
-}
-
-// Renamed from ChatMessage to avoid conflicts
+// Single consistent Message type used everywhere
 message Message {
     string sender = 1;
     string content = 2;
 }
 
-message ChatMessage {
-    string sender = 1;
-    string content = 2;
-    int64 timestamp = 3;
+message LLMRequest {
+    string request_id = 1;
+    string query = 2;
+    repeated string context = 3;
+    map<string, string> parameters = 4;
+}
+
+message LLMResponse {
+    string request_id = 1;
+    string answer = 2;
+    float confidence = 3;
+}
+
+message SmartReplyRequest {
+    string request_id = 1;
+    repeated Message recent_messages = 2;  // Changed from ChatMessage to Message
+    string user_id = 3;
 }
 
 message SmartReplyResponse {
@@ -33,7 +40,7 @@ message SmartReplyResponse {
 
 message SummarizeRequest {
     string request_id = 1;
-    repeated ChatMessage messages = 2;
+    repeated Message messages = 2;  // Changed from ChatMessage to Message
     int32 max_length = 3;
 }
 
@@ -45,7 +52,7 @@ message SummarizeResponse {
 
 message ContextRequest {
     string request_id = 1;
-    repeated Message context = 2;  // Uses Message (simple version)
+    repeated Message context = 2;
     string current_input = 3;
 }
 
