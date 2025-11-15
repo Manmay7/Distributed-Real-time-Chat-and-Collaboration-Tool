@@ -1,3 +1,4 @@
+demo video - https://drive.google.com/file/d/1ECketnTIsNnra_hxnjPw5Kkq-fq_3VbH/view?usp=sharing
 # 🚀 Real-Time Chat & Collaboration Tool
 
 A distributed, fault-tolerant chat application built with **Raft Consensus Algorithm** for high availability and consistency. Features real-time messaging, AI-powered suggestions, file sharing, and channel-based collaboration.
