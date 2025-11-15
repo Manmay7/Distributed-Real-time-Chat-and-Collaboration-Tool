@@ -7,6 +7,8 @@ import os
 import uuid
 from typing import List, Dict
 import google.generativeai as genai
+import datetime
+import time
 
 # Add parent directory to path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -20,12 +22,12 @@ logger = logging.getLogger(__name__)
 
 class LLMServicer(llm_service_pb2_grpc.LLMServiceServicer):
     def __init__(self, gemini_api_key: str):
-        """Initialize LLM Service with Gemini 2.5 Flash"""
+        """Initialize LLM Service with Gemini 2.0 Flash"""
         self.gemini_api_key = gemini_api_key
         self._init_gemini()
     
     def _init_gemini(self):
-        """Initialize Gemini 2.5 Flash API"""
+        """Initialize Gemini 2.0 Flash API"""
         try:
             genai.configure(api_key=self.gemini_api_key)
             self.model = genai.GenerativeModel('gemini-2.5-flash')
@@ -40,7 +42,30 @@ class LLMServicer(llm_service_pb2_grpc.LLMServiceServicer):
             logger.error(f"Failed to initialize Gemini: {e}")
             raise
     
-    
+    def GetLLMAnswer(self, request, context):
+        """Generate answer based on query and context"""
+        request_id = request.request_id
+        query = request.query
+        context_list = list(request.context) if request.context else []
+        
+        logger.info(f"Processing LLM request: {query[:60]}...")
+        
+        try:
+            response_text = self._generate_response(query, context_list)
+            
+            return llm_service_pb2.LLMResponse(
+                request_id=request_id,
+                answer=response_text,
+                confidence=0.95
+            )
+            
+        except Exception as e:
+            logger.error(f"Error processing LLM request: {e}")
+            return llm_service_pb2.LLMResponse(
+                request_id=request_id,
+                answer="I apologize, but I'm having trouble processing your request. Please try again.",
+                confidence=0.0
+            )
     
     def GetSmartReply(self, request, context):
         """Generate smart reply suggestions"""
@@ -89,9 +114,102 @@ class LLMServicer(llm_service_pb2_grpc.LLMServiceServicer):
                 key_points=[]
             )
     
+    def GetContextSuggestions(self, request, context):
+        """Get context-aware suggestions"""
+        request_id = request.request_id
+        context_messages = list(request.context)
+        current_input = request.current_input
+        
+        logger.info(f"Getting context suggestions for input: '{current_input}'")
+        logger.info(f"Context messages count: {len(context_messages)}")
+        
+        try:
+            suggestions, topics = self._get_context_suggestions(context_messages, current_input)
+            
+            logger.info(f"Generated {len(suggestions)} suggestions: {suggestions}")
+            
+            return llm_service_pb2.SuggestionsResponse(
+                request_id=request_id,
+                suggestions=suggestions,
+                topics=topics
+            )
+            
+        except Exception as e:
+            logger.error(f"Error getting suggestions: {e}")
+            import traceback
+            traceback.print_exc()  # Print full stack trace
+            return llm_service_pb2.SuggestionsResponse(
+                request_id=request_id,
+                suggestions=["sounds interesting", "tell me more", "I see"],
+                topics=[]
+            )
     
-    
-   
+    def _generate_response(self, query: str, context_list: List[str]) -> str:
+        """Generate response using Gemini 2.0 Flash with retry"""
+        try:
+            if context_list:
+                # Include recent context for better responses
+                context_str = "\n".join(context_list[-5:])
+                prompt = f"""Based on this recent conversation context:
+
+{context_str}
+
+User's question: {query}
+Do not give more than 2 sentences in your response.
+Provide a helpful, short, informative response that considers the conversation context:"""
+            else:
+                prompt = f"{query}\n\nProvide a short, helpful answer in 2 sentences or less."
+            
+            # Retry up to 3 times with exponential backoff
+            max_retries = 3
+            for attempt in range(max_retries):
+                try:
+                    response = self.model.generate_content(
+                        prompt,
+                        generation_config={
+                            'temperature': 0.7,
+                            'max_output_tokens': 150,
+                        }
+                    )
+                    
+                    # CRITICAL FIX: Check if response has valid text before accessing
+                    if not response or not response.candidates:
+                        logger.warning(f"Empty response from Gemini API (attempt {attempt+1})")
+                        if attempt < max_retries - 1:
+                            time.sleep(2 ** attempt)
+                            continue
+                        return "I'm having trouble generating a response. Please try rephrasing your question."
+                    
+                    # Check if response was blocked
+                    if response.candidates[0].finish_reason not in [1, 2]:  # 1=STOP, 2=MAX_TOKENS
+                        logger.warning(f"Response blocked: {response.candidates[0].finish_reason}")
+                        return "I cannot provide a response to that query. Please try asking something else."
+                    
+                    # Safely get text
+                    try:
+                        return response.text.strip()
+                    except AttributeError:
+                        # Fallback: try to get text from parts
+                        if response.candidates[0].content.parts:
+                            return response.candidates[0].content.parts[0].text.strip()
+                        else:
+                            logger.warning("No text in response parts")
+                            if attempt < max_retries - 1:
+                                time.sleep(2 ** attempt)
+                                continue
+                            return "I received an empty response. Please try again."
+                    
+                except Exception as e:
+                    if attempt < max_retries - 1:
+                        wait_time = 2 ** attempt  # 1s, 2s, 4s
+                        logger.warning(f"Gemini API retry {attempt+1}/{max_retries} after {wait_time}s: {str(e)[:80]}")
+                        time.sleep(wait_time)
+                    else:
+                        raise
+            
+        except Exception as e:
+            logger.error(f"Gemini API error after retries: {e}")
+            return "I'm having trouble connecting to the AI service right now. The API might be overloaded. Please try again in a moment."
     
     def _generate_smart_replies(self, messages: List) -> List[str]:
         """Generate smart reply suggestions using Gemini"""
@@ -111,7 +229,26 @@ Generate exactly 3 short, natural reply suggestions. Each suggestion should be:
 Format: Just list the 3 suggestions, one per line, no numbering or bullets."""
             
             response = self.model.generate_content(prompt)
-            suggestions = [s.strip() for s in response.text.strip().split('\n') if s.strip()]
+            
+            # CRITICAL FIX: Check response validity
+            if not response or not response.candidates:
+                logger.warning("Empty smart reply response")
+                return ["I agree", "That's interesting", "Tell me more"]
+            
+            if response.candidates[0].finish_reason not in [1, 2]:
+                logger.warning(f"Smart reply blocked: {response.candidates[0].finish_reason}")
+                return ["Sounds good", "I understand", "Interesting"]
+            
+            # Safely extract text
+            try:
+                text = response.text.strip()
+            except AttributeError:
+                if response.candidates[0].content.parts:
+                    text = response.candidates[0].content.parts[0].text.strip()
+                else:
+                    return ["I agree", "That makes sense", "Good point"]
+            
+            suggestions = [s.strip() for s in text.split('\n') if s.strip()]
             
             # Clean up any numbering or bullets
             cleaned = []
@@ -148,7 +285,29 @@ Key Points:
 - point 3"""
             
             response = self.model.generate_content(prompt)
-            text = response.text.strip()
+            
+            # CRITICAL FIX: Validate response
+            if not response or not response.candidates:
+                logger.warning("Empty summary response")
+                participants = list(set([m.sender for m in messages]))
+                return (f"Conversation with {len(messages)} messages", 
+                       [f"{len(messages)} messages exchanged"])
+            
+            if response.candidates[0].finish_reason not in [1, 2]:
+                participants = list(set([m.sender for m in messages]))
+                return (f"Discussion between {', '.join(participants)}", 
+                       [f"{len(messages)} messages", "Active conversation"])
+            
+            # Safely extract text
+            try:
+                text = response.text.strip()
+            except AttributeError:
+                if response.candidates[0].content.parts:
+                    text = response.candidates[0].content.parts[0].text.strip()
+                else:
+                    participants = list(set([m.sender for m in messages]))
+                    return (f"Conversation between {', '.join(participants)}", 
+                           [f"{len(messages)} messages"])
             
             # Parse summary and key points
             summary = ""
@@ -196,7 +355,122 @@ Key Points:
                 [f"{len(messages)} messages", f"Participants: {len(participants)}"]
             )
     
-    
+    def _get_context_suggestions(self, messages: List, current_input: str) -> tuple:
+        """Get context-aware suggestions using Gemini"""
+        try:
+            # Build conversation context from Message objects (not ChatMessage)
+            if messages:
+                context = "\n".join([f"{m.sender}: {m.content}" for m in messages[-5:]])
+            else:
+                context = "No previous context"
+            
+            # Include partial input in prompt
+            if current_input:
+                prompt = f"""Based on this conversation context:
+{context}
+
+User started typing: "{current_input}"
+
+Provide 3 natural completions for what they might want to say next, completing their thought.
+Also suggest 2 related topics they could discuss.
+
+Format as simple lists:
+COMPLETIONS:
+- completion 1
+- completion 2  
+- completion 3
+
+TOPICS:
+- topic 1
+- topic 2"""
+            else:
+                prompt = f"""Based on this conversation context:
+{context}
+
+Suggest 3 natural things the user might want to say next.
+Also suggest 2 related topics they could discuss.
+
+Format as simple lists:
+COMPLETIONS:
+- suggestion 1
+- suggestion 2
+- suggestion 3
+
+TOPICS:
+- topic 1
+- topic 2"""
+            
+            response = self.model.generate_content(prompt)
+            
+            # CRITICAL FIX: Validate response
+            if not response or not response.candidates:
+                logger.warning("Empty context suggestions response")
+                return (
+                    ["continue the conversation", "ask for details", "share thoughts"],
+                    ["discussion topic"]
+                )
+            
+            if response.candidates[0].finish_reason not in [1, 2]:
+                return (
+                    ["continue the thought", "ask a question", "share more"],
+                    ["current topic"]
+                )
+            
+            # Safely extract text
+            try:
+                text = response.text.strip()
+            except AttributeError:
+                if response.candidates[0].content.parts:
+                    text = response.candidates[0].content.parts[0].text.strip()
+                else:
+                    return (
+                        ["continue the conversation", "ask for clarification"],
+                        ["related subjects"]
+                    )
+            
+            suggestions = []
+            topics = []
+            
+            current_section = None
+            for line in text.split('\n'):
+                line = line.strip()
+                upper_line = line.upper()
+                
+                if 'COMPLETION' in upper_line or 'SUGGESTION' in upper_line:
+                    current_section = 'suggestions'
+                elif 'TOPIC' in upper_line:
+                    current_section = 'topics'
+                elif line.startswith('-') or line.startswith('•'):
+                    item = line.lstrip('-•* ').strip()
+                    if item:
+                        if current_section == 'suggestions':
+                            suggestions.append(item)
+                        elif current_section == 'topics':
+                            topics.append(item)
+            
+            # Ensure we have at least some suggestions
+            if not suggestions:
+                if current_input:
+                    suggestions = [
+                        f"{current_input} be the best option",
+                        f"{current_input} work well", 
+                        f"{current_input} make sense"
+                    ]
+                else:
+                    suggestions = ["continue the thought", "ask a question", "share more details"]
+            
+            if not topics:
+                topics = ["current discussion", "related ideas"]
+            
+            logger.info(f"Generated {len(suggestions)} suggestions and {len(topics)} topics")
+            return suggestions[:5], topics[:3]
+            
+        except Exception as e:
+            logger.error(f"Context suggestions error: {e}")
+            return (
+                ["continue the conversation", "ask for clarification", "share thoughts"],
+                ["discussion topic", "related subjects"]
+            )
 
 
 def serve():
@@ -250,6 +524,6 @@ def serve():
 
 if __name__ == "__main__":
     print("\n" + "=" * 60)
-    print(" Gemini 2.5 Flash LLM Server")
+    print(" Gemini 2.0 Flash LLM Server")
     print("=" * 60)
     serve()

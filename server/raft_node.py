@@ -1,0 +1,2418 @@
+import grpc
+from concurrent import futures
+import logging
+import threading
+import time
+import random
+import argparse
+import sys
+import os
+from enum import Enum
+from typing import Dict, List, Optional, Set
+import json
+import uuid
+import jwt
+import bcrypt
+from datetime import datetime, timedelta
+import pickle
+from queue import Queue
+import mimetypes
+import datetime
+
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+import generated.raft_node_pb2 as raft_node_pb2
+import generated.raft_node_pb2_grpc as raft_node_pb2_grpc
+
+# Try to import LLM service (optional)
+try:
+    import generated.llm_service_pb2 as llm_service_pb2
+    import generated.llm_service_pb2_grpc as llm_service_pb2_grpc
+    LLM_AVAILABLE = True
+except:
+    LLM_AVAILABLE = False
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+class NodeState(Enum):
+    FOLLOWER = "follower"
+    CANDIDATE = "candidate"
+    LEADER = "leader"
+
+class MessageBroker:
+    """Handles real-time message distribution"""
+    def __init__(self):
+        self.subscribers: Dict[str, Queue] = {}
+        self.lock = threading.Lock()
+    
+    def subscribe(self, user_id: str) -> Queue:
+        with self.lock:
+            queue = Queue(maxsize=100)
+            self.subscribers[user_id] = queue
+            return queue
+    
+    def unsubscribe(self, user_id: str):
+        with self.lock:
+            if user_id in self.subscribers:
+                del self.subscribers[user_id]
+
+class RaftNode(raft_node_pb2_grpc.RaftNodeServicer):
+    def __init__(self, node_id: int, port: int, peers: Dict[int, str]):
+        self.node_id = node_id
+        self.port = port
+        self.peers = peers
+        
+        # Raft state
+        self.current_term = 0
+        self.voted_for = None
+        self.log: List[raft_node_pb2.LogEntry] = []
+        self.commit_index = -1
+        self.last_applied = -1
+        self.state = NodeState.FOLLOWER
+        self.current_leader_id = None
+        self.next_index: Dict[int, int] = {}
+        self.match_index: Dict[int, int] = {}
+        
+        # Timing
+        self.election_deadline = time.time() + self._random_timeout()
+        self.last_heartbeat = time.time()
+        self.heartbeat_interval = HEARTBEAT_INTERVAL
+        # self.heartbeat_interval = 0.1  # increased frequency: 100ms (was 500ms) for faster log sync
+        
+        # Chat application state
+        self.users: Dict[str, dict] = {}
+        self.users_by_id: Dict[str, str] = {}
+        self.sessions: Dict[str, dict] = {}
+        self.jwt_secret = "raft-chat-secret-key"
+        self.channels: Dict[str, dict] = {}
+        self.channel_messages: Dict[str, List[dict]] = {}
+        self.direct_messages: List[dict] = []
+        self.online_users: Set[str] = set()
+        
+        # NEW: File storage
+        self.files: Dict[str, dict] = {}
+        
+        # NEW: Real-time messaging
+        self.message_broker = MessageBroker()
+        
+        # NEW: Persistence
+        self.data_dir = f"raft_node_{node_id}_data"
+        os.makedirs(self.data_dir, exist_ok=True)
+        
+        # NEW: Raft log persistence
+        self.raft_log_file = os.path.join(self.data_dir, f"raft_log_port_{port}.pkl")
+        self.raft_state_file = os.path.join(self.data_dir, f"raft_state_port_{port}.pkl")
+        
+        # Load persisted Raft state FIRST (before loading app data)
+        self._load_raft_state()
+        
+        # Then load application data
+        self._load_persisted_data()
+        
+        # NEW: LLM connection
+        self.llm_stub = None
+        if LLM_AVAILABLE:
+            self._connect_to_llm()
+        
+        # Initialize defaults if needed
+        if not self.channels:
+            self._init_default_data()
+        
+        # Threading
+        self.lock = threading.RLock()
+        self.running = True
+        self.peer_stubs: Dict[int, raft_node_pb2_grpc.RaftNodeStub] = {}
+        self.peer_channels: Dict[int, grpc.Channel] = {}
+        
+        self._init_peer_connections()
+        
+        self.timer_thread = threading.Thread(target=self._timer_loop, daemon=True)
+        self.timer_thread.start()
+        
+        time.sleep(random.uniform(0.5, 1.5))
+        
+        logger.info(f"Node {node_id} initialized with ALL FEATURES")
+        logger.info(f"   Raft Consensus (Log: {len(self.log)} entries, Term: {self.current_term})")
+        logger.info(f"   User Auth (Signup/Login)")
+        logger.info(f"   Channels & Messages")
+        logger.info(f"   Direct Messages")
+        logger.info(f"   File Upload/Download")
+        logger.info(f"   Real-time Streaming")
+        logger.info(f"   Data Persistence + Raft Log Recovery")
+        if self.llm_stub:
+            logger.info(f"   LLM Features (Smart Reply, Summarize)")
+        logger.info(f"Peers: {list(peers.keys())}")
+    
+    def _load_raft_state(self):
+        """Load Raft log and state from disk"""
+        try:
+            # Load Raft state (term, voted_for, commit_index)
+            if os.path.exists(self.raft_state_file):
+                with open(self.raft_state_file, 'rb') as f:
+                    state = pickle.load(f)
+                    self.current_term = state.get('current_term', 0)
+                    self.voted_for = state.get('voted_for', None)
+                    self.commit_index = state.get('commit_index', -1)
+                    self.last_applied = state.get('last_applied', -1)
+                logger.info(f" Recovered Raft state: Term={self.current_term}, CommitIndex={self.commit_index}")
+            
+            # Load Raft log
+            if os.path.exists(self.raft_log_file):
+                with open(self.raft_log_file, 'rb') as f:
+                    log_data = pickle.load(f)
+                    # Reconstruct LogEntry objects
+                    self.log = []
+                    for entry_dict in log_data:
+                        entry = raft_node_pb2.LogEntry(
+                            term=entry_dict['term'],
+                            command=entry_dict['command'],
+                            data=entry_dict['data']
+                        )
+                        self.log.append(entry)
+                logger.info(f" Recovered {len(self.log)} log entries from disk")
+                
+                # Replay committed entries to rebuild application state
+                if self.last_applied < self.commit_index:
+                    logger.info(f"  Replaying {self.commit_index - self.last_applied} committed entries...")
+                    self._apply_committed_entries()
+        except Exception as e:
+            logger.error(f"Error loading Raft state: {e}")
+            logger.info("Starting with fresh Raft state")
+    
+    def _save_raft_state(self):
+        """Persist Raft state to disk"""
+        try:
+            state = {
+                'current_term': self.current_term,
+                'voted_for': self.voted_for,
+                'commit_index': self.commit_index,
+                'last_applied': self.last_applied
+            }
+            with open(self.raft_state_file, 'wb') as f:
+                pickle.dump(state, f)
+            logger.debug(f" Saved Raft state: Term={self.current_term}")
+        except Exception as e:
+            logger.error(f"Error saving Raft state: {e}")
+    
+    def _save_raft_log(self):
+        """Persist Raft log to disk"""
+        try:
+            # Convert LogEntry objects to dicts for serialization
+            log_data = []
+            for entry in self.log:
+                log_data.append({
+                    'term': entry.term,
+                    'command': entry.command,
+                    'data': entry.data
+                })
+            
+            with open(self.raft_log_file, 'wb') as f:
+                pickle.dump(log_data, f)
+            logger.debug(f" Saved Raft log: {len(self.log)} entries")
+        except Exception as e:
+            logger.error(f"Error saving Raft log: {e}")
+
+    def _load_persisted_data(self):
+        """Load persisted data from disk"""
+        try:
+            users_file = os.path.join(self.data_dir, "users.pkl")
+            if os.path.exists(users_file):
+                with open(users_file, 'rb') as f:
+                    data = pickle.load(f)
+                    self.users = data.get('users', {})
+                    self.users_by_id = data.get('users_by_id', {})
+                logger.info(f"Loaded {len(self.users)} users from disk")
+            
+            channels_file = os.path.join(self.data_dir, "channels.pkl")
+            if os.path.exists(channels_file):
+                with open(channels_file, 'rb') as f:
+                    channels_data = pickle.load(f)
+                    for cid, channel in channels_data.items():
+                        # Convert lists back to sets
+                        if 'members' in channel:
+                            channel['members'] = set(channel['members']) if isinstance(channel['members'], list) else channel['members']
+                        if 'admins' in channel:
+                            channel['admins'] = set(channel['admins']) if isinstance(channel['admins'], list) else channel['admins']
+                        # Reconstruct datetime if it was serialized as string
+                        if 'created_at' in channel and isinstance(channel['created_at'], str):
+                            try:
+                                channel['created_at'] = datetime.datetime.fromisoformat(channel['created_at'])
+                            except:
+                                channel['created_at'] = datetime.datetime.now(datetime.timezone.utc)
+                        self.channels[cid] = channel
+                logger.info(f"Loaded {len(self.channels)} channels from disk")
+                
+                # Log channel members for debugging
+                for cid, channel in self.channels.items():
+                    logger.debug(f"  #{channel['name']}: {len(channel['members'])} members, admins={channel.get('admins', set())}")
+            
+            # NEW: Load messages from disk
+            messages_file = os.path.join(self.data_dir, "messages.pkl")
+            if os.path.exists(messages_file):
+                with open(messages_file, 'rb') as f:
+                    self.channel_messages = pickle.load(f)
+                total_messages = sum(len(msgs) for msgs in self.channel_messages.values())
+                logger.info(f" Loaded {total_messages} messages from disk across {len(self.channel_messages)} channels")
+            
+            # NEW: Load direct messages from disk
+            dm_file = os.path.join(self.data_dir, "direct_messages.pkl")
+            if os.path.exists(dm_file):
+                with open(dm_file, 'rb') as f:
+                    self.direct_messages = pickle.load(f)
+                logger.info(f" Loaded {len(self.direct_messages)} direct messages from disk")
+                
+        except Exception as e:
+            logger.error(f"Error loading persisted data: {e}")
+            import traceback
+            traceback.print_exc()
+    
+    def _save_users(self):
+        """Save users to disk"""
+        try:
+            data = {'users': self.users, 'users_by_id': self.users_by_id}
+            with open(os.path.join(self.data_dir, "users.pkl"), 'wb') as f:
+                pickle.dump(data, f)
+        except Exception as e:
+            logger.error(f"Error saving users: {e}")
+    
+    def _save_channels(self):
+        """Save channels to disk"""
+        try:
+            channels_copy = {}
+            for cid, channel in self.channels.items():
+                ch = channel.copy()
+                # Convert sets to lists for serialization
+                ch['members'] = list(channel['members'])
+                ch['admins'] = list(channel['admins']) if isinstance(channel['admins'], set) else channel['admins']
+                # Convert datetime to string
+                if 'created_at' in ch and isinstance(ch['created_at'], datetime.datetime):
+                    ch['created_at'] = ch['created_at'].isoformat()
+                channels_copy[cid] = ch
+            
+            with open(os.path.join(self.data_dir, "channels.pkl"), 'wb') as f:
+                pickle.dump(channels_copy, f)
+            logger.debug(f" Saved {len(channels_copy)} channels with member data to disk")
+        except Exception as e:
+            logger.error(f"Error saving channels: {e}")
+            import traceback
+            traceback.print_exc()
+    
+    def _save_messages(self):
+        """Save channel messages to disk"""
+        try:
+            with open(os.path.join(self.data_dir, "messages.pkl"), 'wb') as f:
+                pickle.dump(self.channel_messages, f)
+            logger.debug(f" Saved messages to disk")
+        except Exception as e:
+            logger.error(f"Error saving messages: {e}")
+    
+    def _save_direct_messages(self):
+        """Save direct messages to disk"""
+        try:
+            with open(os.path.join(self.data_dir, "direct_messages.pkl"), 'wb') as f:
+                pickle.dump(self.direct_messages, f)
+            logger.debug(f" Saved direct messages to disk")
+        except Exception as e:
+            logger.error(f"Error saving direct messages: {e}")
+
+    
+    def _save_users(self):
+        """Save users to disk"""
+        try:
+            data = {'users': self.users, 'users_by_id': self.users_by_id}
+            with open(os.path.join(self.data_dir, "users.pkl"), 'wb') as f:
+                pickle.dump(data, f)
+        except Exception as e:
+            logger.error(f"Error saving users: {e}")
+    
+    def _save_channels(self):
+        """Save channels to disk"""
+        try:
+            channels_copy = {}
+            for cid, channel in self.channels.items():
+                ch = channel.copy()
+                # Convert sets to lists for serialization
+                ch['members'] = list(channel['members'])
+                ch['admins'] = list(channel['admins']) if isinstance(channel['admins'], set) else channel['admins']
+                # Convert datetime to string
+                if 'created_at' in ch and isinstance(ch['created_at'], datetime.datetime):
+                    ch['created_at'] = ch['created_at'].isoformat()
+                channels_copy[cid] = ch
+            
+            with open(os.path.join(self.data_dir, "channels.pkl"), 'wb') as f:
+                pickle.dump(channels_copy, f)
+            logger.debug(f" Saved {len(channels_copy)} channels with member data to disk")
+        except Exception as e:
+            logger.error(f"Error saving channels: {e}")
+            import traceback
+            traceback.print_exc()
+    
+    def _save_messages(self):
+        """Save channel messages to disk"""
+        try:
+            with open(os.path.join(self.data_dir, "messages.pkl"), 'wb') as f:
+                pickle.dump(self.channel_messages, f)
+            logger.debug(f" Saved messages to disk")
+        except Exception as e:
+            logger.error(f"Error saving messages: {e}")
+    
+    def _save_direct_messages(self):
+        """Save direct messages to disk"""
+        try:
+            with open(os.path.join(self.data_dir, "direct_messages.pkl"), 'wb') as f:
+                pickle.dump(self.direct_messages, f)
+            logger.debug(f" Saved direct messages to disk")
+        except Exception as e:
+            logger.error(f"Error saving direct messages: {e}")
+
+    def _connect_to_llm(self):
+        """Connect to LLM server"""
+        try:
+            llm_address = "localhost:50055"
+            self.llm_channel = grpc.insecure_channel(
+                llm_address,
+                options=[
+                    ('grpc.keepalive_time_ms', 30000),
+                    ('grpc.keepalive_timeout_ms', 5000),
+                ]
+            )
+            self.llm_stub = llm_service_pb2_grpc.LLMServiceStub(self.llm_channel)
+            
+            # Test connection with a simple request
+            test_req = llm_service_pb2.LLMRequest(
+                request_id=str(uuid.uuid4()),
+                query="Hello",
+                context=[]
+            )
+            
+            # Try to call with short timeout
+            try:
+                test_response = self.llm_stub.GetLLMAnswer(test_req, timeout=3.0)
+                logger.info(f" Connected to LLM server at {llm_address}")
+            except grpc.RpcError as e:
+                if e.code() == grpc.StatusCode.UNAVAILABLE:
+                    logger.warning(f"    LLM server at {llm_address} is not available")
+                    logger.warning(f"    Start it with: python llm_server/llm_server.py")
+                    self.llm_stub = None
+                else:
+                    # Server responded but maybe with error - that's OK, connection works
+                    logger.info(f" LLM server at {llm_address} is reachable")
+            
+        except Exception as e:
+            logger.warning(f"    Could not connect to LLM server: {e}")
+            logger.warning(f"    LLM features will be disabled")
+            logger.warning(f"    Start LLM server: python llm_server/llm_server.py")
+            self.llm_stub = None
+    
+    def _ensure_llm_connection(self) -> bool:
+        """Ensure LLM connection, attempt reconnect if needed"""
+        if self.llm_stub is not None:
+            return True
+        
+        # Try to connect if not already connected
+        if LLM_AVAILABLE:
+            try:
+                logger.info("  Attempting to connect to LLM server...")
+                self._connect_to_llm()
+                if self.llm_stub is not None:
+                    logger.info("  Successfully connected to LLM server")
+                    return True
+            except Exception as e:
+                logger.warning(f"Failed to reconnect to LLM: {e}")
+        
+        return False
+    
+    def _init_default_data(self):
+        """Initialize default channels and test users"""
+        # First create users
+        # CRITICAL: Use username as user_id for default users (not UUID)
+        # This ensures all nodes use the same user IDs
+        user_ids = {}
+        for username, password in [("alice", "alice123"), ("bob", "bob123"), ("charlie", "charlie123")]:
+            user_id = username  # Use username as ID for consistency across nodes
+            self.users[username] = {
+                "id": user_id,
+                "username": username,
+                "password": bcrypt.hashpw(password.encode(), bcrypt.gensalt()),
+                "email": f"{username}@chat.com",
+                "display_name": username.title(),
+                "is_admin": False,  # No special admin users
+                "status": "offline"
+            }
+            self.users_by_id[user_id] = username
+            user_ids[username] = user_id
+        
+        # Create default public channels - all users are members and admins
+        # CRITICAL: Use channel name as ID for default channels (not UUID)
+        # This ensures all nodes use the same channel IDs
+        for channel_name in ["general", "random", "tech"]:
+            channel_id = channel_name  # Use name as ID for consistency across nodes
+            
+            # All default channels: public, all users are members AND admins
+            self.channels[channel_id] = {
+                "id": channel_id,
+                "name": channel_name,
+                "description": f"Default {channel_name} channel (public)",
+                "is_private": False,
+                "members": set(user_ids.values()),
+                "admins": set(user_ids.values()),  # Everyone is admin in default channels
+                "created_at": datetime.datetime.now(datetime.timezone.utc)
+            }
+            self.channel_messages[channel_id] = []
+        
+        self._save_users()
+        self._save_channels()
+        logger.info(f"Initialized {len(self.channels)} channels and {len(self.users)} test users")
+        logger.info(f"  - All default channels (general, random, tech): {len(user_ids)} members (all are admins)")
+    
+    def _random_timeout(self) -> float:
+        """Random election timeout 10-15s for better stability - INCREASED"""
+        return random.uniform(10.0, 15.0)
+    
+    def _reset_election_timer(self):
+        """Reset election timer with new random timeout"""
+        self.election_deadline = time.time() + self._random_timeout()
+    
+    def _init_peer_connections(self):
+        """Initialize persistent connections to all peers"""
+        for peer_id, peer_addr in self.peers.items():
+            try:
+                channel = grpc.insecure_channel(
+                    peer_addr,
+                    options=[
+                        ('grpc.max_send_message_length', 50 * 1024 * 1024),
+                        ('grpc.max_receive_message_length', 50 * 1024 * 1024),
+                        ('grpc.keepalive_time_ms', 10000),
+                        ('grpc.keepalive_timeout_ms', 5000),
+                        ('grpc.keepalive_permit_without_calls', True),
+                        ('grpc.http2.max_pings_without_data', 0),
+                    ]
+                )
+                self.peer_channels[peer_id] = channel
+                self.peer_stubs[peer_id] = raft_node_pb2_grpc.RaftNodeStub(channel)
+                logger.info(f"Connected to peer {peer_id} at {peer_addr}")
+            except Exception as e:
+                logger.error(f"Failed to connect to peer {peer_id}: {e}")
+    
+    def _get_peer_stub(self, peer_id: int) -> Optional[raft_node_pb2_grpc.RaftNodeStub]:
+        """Get gRPC stub for peer"""
+        return self.peer_stubs.get(peer_id)
+    
+    def _timer_loop(self):
+        """Main timer loop for elections and heartbeats"""
+        while self.running:
+            time.sleep(0.01)  # 10ms granularity
+            
+            with self.lock:
+                if self.state == NodeState.LEADER:
+                    # Send heartbeats CONSTANTLY (every 50ms)
+                    if time.time() - self.last_heartbeat >= self.heartbeat_interval:
+                        self._send_heartbeats()
+                        self.last_heartbeat = time.time()
+                else:
+                    # Check election timeout
+                    if time.time() >= self.election_deadline:
+                        self._start_election()
+
+    def _start_election(self):
+        """Start new election"""
+        # Prevent races: re-check deadline before proceeding
+        # Longer random delay to reduce simultaneous elections
+        time.sleep(random.uniform(0, 0.2))
+
+        # Quick pre-check to avoid starting election if deadline was reset by other thread
+        with self.lock:
+            if time.time() < self.election_deadline:
+                # Another thread reset the timer (heartbeat or higher-term) — abort election
+                logger.debug(f"Node {self.node_id}: Election aborted, deadline reset")
+                return
+
+        with self.lock:
+            # Check if still eligible to start election
+            if self.state == NodeState.LEADER:
+                return
+            
+            self.state = NodeState.CANDIDATE
+            self.current_term += 1
+            self.voted_for = self.node_id
+            self._reset_election_timer()
+            
+            #   SAVE STATE: Persist term and vote
+            self._save_raft_state()
+            
+            term = self.current_term
+            last_log_index = len(self.log) - 1
+            last_log_term = self.log[-1].term if self.log else 0
+            
+            logger.info(f"Node {self.node_id}:  Starting election for term {term}")
+        
+        votes = 1  # Vote for self
+        votes_needed = (len(self.peers) + 1) // 2 + 1
+        votes_lock = threading.Lock()
+        votes_received = {self.node_id}  # Track who voted
+        became_leader_lock = threading.Lock()
+        became_leader = [False]  # Use list to make it mutable in closure
+        
+        # Request votes in parallel with better error handling
+        def request_vote(peer_id):
+            nonlocal votes
+            try:
+                stub = self._get_peer_stub(peer_id)
+                if not stub:
+                    logger.warning(f"No stub for peer {peer_id}")
+                    return
+                
+                request = raft_node_pb2.VoteRequest(
+                    term=term,
+                    candidate_id=self.node_id,
+                    last_log_index=last_log_index,
+                    last_log_term=last_log_term
+                )
+                
+                # Single attempt with longer timeout
+                try:
+                    response = stub.RequestVote(request, timeout=3.0)
+                except grpc.RpcError as e:
+                    logger.debug(f"Vote request to {peer_id} failed: {e.code()}")
+                    return
+                
+                # Process response outside of main lock first
+                if response.term > term:
+                    with self.lock:
+                        if response.term > self.current_term:
+                            logger.info(f"Node {self.node_id}: Higher term {response.term} from {peer_id}, stepping down")
+                            self.current_term = response.term
+                            self.state = NodeState.FOLLOWER
+                            self.voted_for = None
+                            self._reset_election_timer()
+                    return
+                
+                if response.vote_granted and response.term == term:
+                    # Check if already became leader
+                    with became_leader_lock:
+                        if became_leader[0]:
+                            return
+                        
+                        votes += 1
+                        votes_received.add(peer_id)
+                        current_votes = votes
+                    
+                    logger.info(f"Node {self.node_id}: Got vote from node {peer_id} (total: {current_votes}/{votes_needed})")
+                    
+                    # Check if we have majority
+                    if current_votes >= votes_needed:
+                        with became_leader_lock:
+                            if became_leader[0]:  # Double-check
+                                return
+                            became_leader[0] = True  # Mark FIRST, before calling _become_leader
+                        
+                        with self.lock:
+                            # Triple-check we're still in the same election
+                            if self.state == NodeState.CANDIDATE and self.current_term == term:
+                                logger.info(f"Node {self.node_id}: Won election! Becoming leader...")
+                                self._become_leader()
+                else:
+                    logger.debug(f"Node {self.node_id}: Vote denied by {peer_id}")
+                    
+            except Exception as e:
+                logger.error(f"Vote request exception from peer {peer_id}: {e}")
+        
+        # Start all vote request threads
+        threads = []
+        for peer_id in self.peers:
+            t = threading.Thread(target=request_vote, args=(peer_id,), daemon=True)
+            t.start()
+            threads.append(t)
+        
+        # Wait for all threads to complete with timeout
+        for t in threads:
+            t.join(timeout=3.5)
+        
+        # Final check (after waiting for all vote replies)
+        with became_leader_lock:
+            leader_flag = became_leader[0]
+        
+        if leader_flag:
+            with self.lock:
+                if self.state == NodeState.LEADER and self.current_term == term:
+                    logger.info(f"Node {self.node_id}: Confirmed leader for term {term}")
+                else:
+                    logger.info(f"Node {self.node_id}:  Became leader but stepped down (current state: {self.state.value}, term: {self.current_term})")
+            return
+
+        # Never became leader → we lost
+        with self.lock:
+            if self.state == NodeState.CANDIDATE and self.current_term == term:
+                final_votes = len(votes_received)
+                logger.info(
+                    f"Node {self.node_id}: Lost election - {final_votes}/{len(self.peers)+1} votes "
+                    f"(needed {votes_needed}) | Got votes from nodes: {sorted(votes_received)}"
+                )
+                self.state = NodeState.FOLLOWER
+                self._reset_election_timer()
+
+    def _become_leader(self):
+        """Become leader - MUST be called with lock held"""
+        logger.info(f" Node {self.node_id}: BECAME LEADER for term {self.current_term}")
+        
+        self.state = NodeState.LEADER
+        self.current_leader_id = self.node_id
+        
+        if self.commit_index >= 0:
+            logger.info(f" New leader FORCING FULL state rebuild from Raft log...")
+            logger.info(f"   Current state BEFORE rebuild:")
+            logger.info(f"     Users: {len(self.users)}, Channels: {len(self.channels)}")
+            
+            for cid, channel in self.channels.items():
+                logger.info(f"     #{channel['name']}: {len(channel['members'])} members")
+            
+            logger.info(f"     DMs: {len(self.direct_messages)}, Messages: {sum(len(msgs) for msgs in self.channel_messages.values())}")
+            logger.info(f"     Last applied: {self.last_applied}, Commit index: {self.commit_index}")
+            
+            # Count expected items from Raft log
+            expected_users = 0
+            expected_channels = 0
+            expected_joins = 0
+            expected_dms = 0
+            expected_messages = 0
+            
+            for i in range(self.commit_index + 1):
+                if i < len(self.log):
+                    cmd = self.log[i].command
+                    if cmd == "CREATE_USER":
+                        expected_users += 1
+                    elif cmd == "CREATE_CHANNEL":
+                        expected_channels += 1
+                    elif cmd == "JOIN_CHANNEL":
+                        expected_joins += 1
+                    elif cmd == "SEND_DM":
+                        expected_dms += 1
+                    elif cmd == "SEND_MESSAGE":
+                        expected_messages += 1
+            
+            logger.info(f"   Expected from Raft log:")
+            logger.info(f"     {expected_users} users, {expected_channels} channels, {expected_joins} joins")
+            logger.info(f"     {expected_dms} DMs, {expected_messages} messages")
+            
+            logger.warning(f" FORCING FULL STATE REBUILD from Raft log (disk is just cache)...")
+            
+            # Log current DM state before clearing
+            logger.info(f"Current DMs before rebuild: {len(self.direct_messages)}")
+            if self.direct_messages:
+                for dm in self.direct_messages[-3:]:
+                    logger.debug(f"  DM: {dm.get('sender_name')} → {dm.get('recipient_name')}: {dm.get('content')[:30]}")
+            
+            # CRITICAL FIX: PRESERVE loaded data - only clear if we're actually rebuilding
+            # Count what we already have from disk
+            existing_messages = sum(len(msgs) for msgs in self.channel_messages.values())
+            existing_dms = len(self.direct_messages)
+            existing_members = {cid: len(ch['members']) for cid, ch in self.channels.items()}
+            
+            logger.info(f"   Existing state before rebuild:")
+            logger.info(f"   Messages: {existing_messages}, DMs: {existing_dms}")
+            for cid, count in existing_members.items():
+                logger.info(f"   #{self.channels[cid]['name']}: {count} members")
+            
+            # CRITICAL FIX: ALWAYS check and apply new log entries
+            # The Raft log is the source of truth, not disk files
+            old_last_applied = self.last_applied
+            
+            logger.info("=" * 60)
+            logger.info(f"   REBUILD ANALYSIS:")
+            logger.info(f"   commit_index: {self.commit_index}")
+            logger.info(f"   last_applied: {self.last_applied}")
+            logger.info(f"   log length: {len(self.log)}")
+            logger.info(f"   existing_messages: {existing_messages}")
+            logger.info(f"   existing_dms: {existing_dms}")
+            
+            # Check if we need a FULL rebuild (starting from scratch)
+            total_existing_members = sum(len(ch['members']) for ch in self.channels.values())
+            need_full_rebuild = (existing_messages == 0 and existing_dms == 0 and total_existing_members == 0)
+            
+            logger.info(f"   total_existing_members: {total_existing_members}")
+            logger.info(f"   need_full_rebuild: {need_full_rebuild}")
+            logger.info("=" * 60)
+            
+            # CRITICAL FIX: ALWAYS do full rebuild when becoming leader
+            # Disk data may be stale/inconsistent - Raft log is the only source of truth
+            logger.warning("    FORCING FULL REBUILD: Clearing all transactional state...")
+            
+            # First, log what's in the Raft log
+            logger.info("=" * 70)
+            logger.info(f"   RAFT LOG CONTENTS ({len(self.log)} entries):")
+            for i, entry in enumerate(self.log):
+                try:
+                    data = json.loads(entry.data.decode('utf-8'))
+                    content_preview = ""
+                    if entry.command == "SEND_MESSAGE":
+                        content_preview = f" - '{data.get('content', 'N/A')}'"
+                    elif entry.command == "SEND_DM":
+                        content_preview = f" - '{data.get('content', 'N/A')}'"
+                    logger.info(f"   [{i}] {entry.command}{content_preview} (term {entry.term})")
+                except:
+                    logger.info(f"   [{i}] {entry.command} (term {entry.term})")
+            logger.info("=" * 70)
+            
+            # CRITICAL: Clear ALL transactional state including channels
+            # Only keep default users (alice, bob, charlie) and default channels (general, random, tech)
+            self.direct_messages = []
+            self.channel_messages = {}
+            
+            # Remove ALL channels (they will be recreated from log)
+            logger.info("   Clearing ALL channels (will rebuild from CREATE_CHANNEL commands in log)...")
+            self.channels = {}
+            
+            # Reinitialize default channels only (these are not in the log)
+            user_ids = {username: username for username in ["alice", "bob", "charlie"]}
+            for channel_name in ["general", "random", "tech"]:
+                channel_id = channel_name
+                self.channels[channel_id] = {
+                    "id": channel_id,
+                    "name": channel_name,
+                    "description": f"Default {channel_name} channel (public)",
+                    "is_private": False,
+                    "members": set(),  # Will be populated by JOIN_CHANNEL from log
+                    "admins": set(user_ids.values()),
+                    "created_at": datetime.datetime.now(datetime.timezone.utc)
+                }
+                self.channel_messages[channel_id] = []
+            
+            # Force replay ALL committed entries from the beginning
+            old_last_applied = self.last_applied
+            self.last_applied = -1
+            
+            logger.info(f"    Replaying {self.commit_index + 1} log entries (0 to {self.commit_index})...")
+            logger.info(f"   (Ignoring disk data - Raft log is source of truth)")
+            
+            self._apply_committed_entries()
+            
+            final_messages = sum(len(msgs) for msgs in self.channel_messages.values())
+            final_dms = len(self.direct_messages)
+            final_members = sum(len(ch['members']) for ch in self.channels.values())
+            
+            logger.info(f"   FULL rebuild complete:")
+            logger.info(f"   Messages: {existing_messages} (disk) → {final_messages} (log)")
+            logger.info(f"   DMs: {existing_dms} (disk) → {final_dms} (log)")
+            logger.info(f"   Members: {total_existing_members} (disk) → {final_members} (log)")
+            logger.info(f"   last_applied: {old_last_applied} → {self.last_applied}")
+            
+            # Count final state
+            new_actual_messages = sum(len(msgs) for msgs in self.channel_messages.values())
+            total_members = sum(len(ch['members']) for ch in self.channels.values())
+            
+            logger.info(f"   FULL REBUILD COMPLETE:")
+            logger.info(f"   Users: {len(self.users)} (expected {expected_users} new + existing)")
+            logger.info(f"   Channels: {len(self.channels)} (expected {expected_channels} new + existing)")
+            
+            for cid, channel in self.channels.items():
+                logger.info(f"     #{channel['name']}: {len(channel['members'])} members")
+            
+            logger.info(f"   Total JOIN operations applied: {expected_joins}")
+            logger.info(f"   DMs: {len(self.direct_messages)}/{expected_dms} expected")
+            if self.direct_messages:
+                logger.info(f"   Last 3 DMs after rebuild:")
+                for dm in self.direct_messages[-3:]:
+                    logger.info(f"     {dm.get('sender_name')} → {dm.get('recipient_name')}: {dm.get('content')[:30]}")
+            logger.info(f"   Messages: {new_actual_messages}/{expected_messages} expected")
+            logger.info(f"   Last applied: {old_last_applied} → {self.last_applied}")
+            
+            # Persist the rebuilt state
+            self._save_users()
+            self._save_channels()
+            self._save_direct_messages()
+            self._save_messages()
+            
+            # Verify counts match
+            if len(self.direct_messages) != expected_dms:
+                logger.error(f"   DM COUNT MISMATCH: Expected {expected_dms}, got {len(self.direct_messages)}")
+            elif new_actual_messages != expected_messages:
+                logger.error(f"   MESSAGE COUNT MISMATCH: Expected {expected_messages}, got {new_actual_messages}")
+            else:
+                logger.info(f" All transactional counts match!")
+            
+            # Verify channel memberships
+            if total_members == 0 and expected_joins > 0:
+                logger.error(f"   CRITICAL: {expected_joins} JOIN commands but 0 members! Check _apply_join_channel()")
+            else:
+                logger.info(f"   Channel memberships rebuilt: {total_members} total members across {len(self.channels)} channels")
+        
+        # Initialize leader state
+        for peer_id in self.peers:
+            self.next_index[peer_id] = len(self.log)
+            self.match_index[peer_id] = -1
+        
+        self.last_heartbeat = time.time()
+        
+        threading.Thread(target=self._send_initial_heartbeats, daemon=True).start()
+    
+    def _send_initial_heartbeats(self):
+        """Send initial heartbeats when becoming leader"""
+        time.sleep(0.01)  # Tiny delay to ensure state is fully set
+        
+        # Send multiple heartbeats to ensure followers receive them
+        for i in range(3):
+            with self.lock:
+                if self.state == NodeState.LEADER:
+                    logger.info(f"Node {self.node_id}: Sending initial heartbeat wave {i+1}/3")
+                    self._send_heartbeats()
+            time.sleep(0.1)
+
+    def _send_heartbeats(self):
+        """Send heartbeats to all peers"""
+        if self.state != NodeState.LEADER:
+            return
+
+        logger.debug(f"Node {self.node_id}: Sending heartbeats to {len(self.peers)} peers")
+
+        def send_to_peer(peer_id):
+            try:
+                stub = self._get_peer_stub(peer_id)
+                if not stub:
+                    logger.warning(f"Node {self.node_id}: No stub for peer {peer_id}")
+                    return
+
+                with self.lock:
+                    if self.state != NodeState.LEADER:
+                        return
+
+                    prev_log_index = self.next_index.get(peer_id, 0) - 1
+                    prev_log_term = self.log[prev_log_index].term if prev_log_index >= 0 and prev_log_index < len(self.log) else 0
+                    entries = self.log[self.next_index[peer_id]:] if self.next_index.get(peer_id, 0) < len(self.log) else []
+                    current_term = self.current_term
+                    leader_commit = self.commit_index
+
+                request = raft_node_pb2.AppendEntriesRequest(
+                    term=current_term,
+                    leader_id=self.node_id,
+                    prev_log_index=prev_log_index,
+                    prev_log_term=prev_log_term,
+                    entries=entries,
+                    leader_commit=leader_commit
+                )
+
+                logger.debug(f"Node {self.node_id}: AppendEntries -> peer {peer_id}, entries={len(entries)}, prev_index={prev_log_index}")
+                response = stub.AppendEntries(request, timeout=2.0)
+                logger.debug(f"Node {self.node_id}: AppendEntries <- peer {peer_id}, success={response.success}, term={response.term}")
+
+                with self.lock:
+                    if response.term > self.current_term:
+                        logger.info(f"Node {self.node_id}: Higher term {response.term} from peer {peer_id}, stepping down")
+                        self.current_term = response.term
+                        self.state = NodeState.FOLLOWER
+                        self.voted_for = None
+                        self.current_leader_id = None
+                        self._reset_election_timer()
+                        self._save_raft_state()
+                        return
+
+                    if self.state != NodeState.LEADER or self.current_term != current_term:
+                        return
+
+                    if response.success:
+                        if entries:
+                            # Successfully replicated entries
+                            new_match = prev_log_index + len(entries)
+                            old_match = self.match_index.get(peer_id, -1)
+                            self.match_index[peer_id] = new_match
+                            self.next_index[peer_id] = new_match + 1
+                            logger.info(f"Node {self.node_id}: Peer {peer_id} replicated up to index {new_match} (was {old_match})")
+                        else:
+                            # Empty heartbeat ACK - only update if peer is actually caught up
+                            # Don't increment next_index if there are uncommitted entries to send
+                            if self.next_index[peer_id] >= len(self.log):
+                                # Peer is fully caught up with our log
+                                if prev_log_index > self.match_index.get(peer_id, -1):
+                                    self.match_index[peer_id] = prev_log_index
+                                    logger.debug(f"Node {self.node_id}: Peer {peer_id} heartbeat ACK, match_index={prev_log_index}")
+                            else:
+                                # Peer is behind - don't update next_index on empty heartbeat
+                                # This prevents race conditions during replication
+                                logger.debug(f"Node {self.node_id}: Peer {peer_id} ACK'd heartbeat but still behind (next_index={self.next_index[peer_id]}, log_len={len(self.log)})")
+                    else:
+                        old_next = self.next_index.get(peer_id, 0)
+                        self.next_index[peer_id] = max(0, old_next - 1)
+                        logger.debug(f"Node {self.node_id}: Peer {peer_id} rejected AppendEntries, next_index {old_next}->{self.next_index[peer_id]}")
+
+            except grpc.RpcError as e:
+                logger.warning(f"Node {self.node_id}: Heartbeat RPC to {peer_id} failed: {e.code()}")
+            except Exception as e:
+                logger.error(f"Node {self.node_id}: Heartbeat error to peer {peer_id}: {e}")
+
+        threads = []
+        for peer_id in self.peers:
+            t = threading.Thread(target=send_to_peer, args=(peer_id,), daemon=True)
+            t.start()
+            threads.append(t)
+
+        for t in threads:
+            t.join(timeout=1.0)
+
+        self._try_commit_entries()
+
+    def _try_commit_entries(self):
+        """Advance commit_index when a majority has replicated entries"""
+        if self.state != NodeState.LEADER:
+            return
+
+        total_nodes = len(self.peers) + 1
+        majority = (total_nodes // 2) + 1
+
+        for index in range(self.commit_index + 1, len(self.log)):
+            replicated = 1  # leader
+            for peer_id in self.peers:
+                if self.match_index.get(peer_id, -1) >= index:
+                    replicated += 1
+
+            if replicated >= majority and self.log[index].term == self.current_term:
+                logger.info(f"Node {self.node_id}: Commit index advanced {self.commit_index}->{index} ({replicated}/{total_nodes})")
+                self.commit_index = index
+                self._apply_committed_entries()
+                self._save_raft_state()
+            else:
+                break
+
+    def RequestVote(self, request, context):
+        with self.lock:
+            logger.info(f"Node {self.node_id}:  Vote request from node {request.candidate_id} for term {request.term} (current term: {self.current_term})")
+            
+            if request.term < self.current_term:
+                logger.info(f"Node {self.node_id}:  Rejecting vote - stale term ({request.term} < {self.current_term})")
+                return raft_node_pb2.VoteResponse(
+                    term=self.current_term,
+                    vote_granted=False
+                )
+            
+            if request.term > self.current_term:
+                logger.info(f"Node {self.node_id}:  Higher term {request.term}, updating and becoming follower")
+                self.current_term = request.term
+                self.state = NodeState.FOLLOWER
+                self.voted_for = None
+                self.current_leader_id = None
+                
+                #  SAVE STATE: Persist new term
+                self._save_raft_state()
+            
+            vote_granted = False
+            
+            if self.voted_for is None or self.voted_for == request.candidate_id:
+                our_last_log_index = len(self.log) - 1
+                our_last_log_term = self.log[-1].term if self.log else 0
+                
+                log_ok = (request.last_log_term > our_last_log_term or
+                         (request.last_log_term == our_last_log_term and request.last_log_index >= our_last_log_index))
+                
+                if log_ok:
+                    vote_granted = True
+                    self.voted_for = request.candidate_id
+                    self._reset_election_timer()
+                    
+                    #  SAVE STATE: Persist vote
+                    self._save_raft_state()
+                    
+                    logger.info(f"Node {self.node_id}:   GRANTED vote to node {request.candidate_id} for term {request.term}")
+                else:
+                    logger.info(f"Node {self.node_id}:   Rejecting vote - log not up-to-date")
+            else:
+                logger.info(f"Node {self.node_id}:   Rejecting vote - already voted for node {self.voted_for}")
+            
+            return raft_node_pb2.VoteResponse(
+                term=self.current_term,
+                vote_granted=vote_granted
+            )
+    
+    def AppendEntries(self, request, context):
+        with self.lock:
+            #logger.info(f"Node {self.node_id}: AppendEntries from {request.leader_id}, term={request.term}, prev_index={request.prev_log_index}, entries={len(request.entries)}, our_log_len={len(self.log)}")
+            
+            if request.term < self.current_term:
+                logger.warning(f"Node {self.node_id}:   Rejecting AppendEntries - stale term {request.term} < {self.current_term}")
+                return raft_node_pb2.AppendEntriesResponse(
+                    term=self.current_term,
+                    success=False
+                )
+            
+            # Valid heartbeat/AppendEntries from current or higher term
+            if request.term >= self.current_term:
+                if request.term > self.current_term:
+                    logger.info(f"Node {self.node_id}:  Higher term {request.term} from leader node {request.leader_id}, updating")
+                    self.current_term = request.term
+                    self.voted_for = None
+                    self._save_raft_state()
+                
+                # Update leader info
+                if self.current_leader_id != request.leader_id:
+                    logger.info(f"Node {self.node_id}: [NEW LEADER] Recognized NEW leader node {request.leader_id} for term {request.term}")
+                    self.current_leader_id = request.leader_id
+                
+                # Become follower if we're not already
+                if self.state != NodeState.FOLLOWER:
+                    logger.info(f"Node {self.node_id}: Becoming follower")
+                    self.state = NodeState.FOLLOWER
+                
+                # Reset election timer
+                self._reset_election_timer()
+            
+            # Log consistency check - ADD DETAILED LOGGING HERE
+            success = False
+            rejection_reason = ""
+            
+            if request.prev_log_index == -1:
+                success = True
+                logger.debug(f"Node {self.node_id}:   Log check passed (prev_index=-1, empty log expected)")
+            elif request.prev_log_index >= len(self.log):
+                success = False
+                rejection_reason = f"Log too short: have {len(self.log)} entries, need {request.prev_log_index + 1}"
+                logger.warning(f"Node {self.node_id}:   {rejection_reason}")
+            elif self.log[request.prev_log_index].term != request.prev_log_term:
+                success = False
+                rejection_reason = f"Term mismatch at index {request.prev_log_index}: expected term {request.prev_log_term}, got {self.log[request.prev_log_index].term}"
+                logger.warning(f"Node {self.node_id}:   {rejection_reason}")
+            else:
+                success = True
+                logger.debug(f"Node {self.node_id}:   Log check passed at index {request.prev_log_index}")
+            
+            if success:
+                # Append entries
+                if request.entries:
+                    insert_index = request.prev_log_index + 1
+                    self.log = self.log[:insert_index] + list(request.entries)
+                    logger.info(f"Node {self.node_id}:   Appended {len(request.entries)} entries at index {insert_index}, log now has {len(self.log)} entries")
+                    self._save_raft_log()
+                else:
+                    logger.debug(f"Node {self.node_id}: Empty AppendEntries (heartbeat), log stays at {len(self.log)} entries")
+                
+                # Update commit index
+                if request.leader_commit > self.commit_index:
+                    old_commit = self.commit_index
+                    self.commit_index = min(request.leader_commit, len(self.log) - 1)
+                    logger.info(f"Node {self.node_id}: Commit index {old_commit}->{self.commit_index}")
+                    self._save_raft_state()
+                    self._apply_committed_entries()
+            else:
+                logger.error(f"Node {self.node_id}:   REJECTING AppendEntries: {rejection_reason}")
+            
+            return raft_node_pb2.AppendEntriesResponse(
+                term=self.current_term,
+                success=success
+            )
+    
+    def _replicate_state_change(self, command: str, data: dict) -> bool:
+        """Replicate state change through Raft log"""
+        if self.state != NodeState.LEADER:
+            return False
+
+        try:
+            entry = raft_node_pb2.LogEntry(
+                term=self.current_term,
+                command=command,
+                data=json.dumps(data).encode('utf-8')
+            )
+
+            with self.lock:
+                self.log.append(entry)
+                log_index = len(self.log) - 1
+                self._save_raft_log()
+                
+                # Apply locally FIRST for instant response (eventual consistency)
+                if ALLOW_LOCAL_COMMIT and command in ALLOW_LOCAL_COMMIT_COMMANDS:
+                    logger.info(f"Node {self.node_id}:   {command} applied locally at index {log_index} (instant)")
+                    self.commit_index = log_index
+                    self._apply_committed_entries()
+                    self._save_raft_state()
+                    
+                    # NOTE: Do not trigger immediate heartbeats here.
+                    # Periodic heartbeats will batch and replicate entries shortly after.
+                    return True  # Return instantly
+
+                # For CRITICAL commands, wait for replication (but with timeout)
+                logger.info(f"Node {self.node_id}: {command} needs replication (critical operation)")
+
+            # Send heartbeats to trigger replication
+            for wave in range(2):  # Reduced from 3 to 2
+                with self.lock:
+                    if self.state == NodeState.LEADER:
+                        self._send_heartbeats()
+                time.sleep(0.03)
+            
+            # Wait for replication with timeout (max 2 seconds)
+            start_time = time.time()
+            
+            for attempt in range(100):  # 100 * 0.02 = 2 seconds max
+                with self.lock:
+                    replicated = 1  # Self
+                    for peer_id in self.peers:
+                        if self.match_index.get(peer_id, -1) >= log_index:
+                            replicated += 1
+
+                    total_nodes = len(self.peers) + 1
+                    majority = (total_nodes // 2) + 1
+
+                    if replicated >= majority:
+                        elapsed = time.time() - start_time
+                        self.commit_index = log_index
+                        self._save_raft_state()
+                        self._apply_committed_entries()
+                        logger.info(f"{command} committed to {replicated}/{total_nodes} nodes in {elapsed:.2f}s")
+                        return True
+
+                time.sleep(0.02)  # 20ms between checks
+
+            # Timeout
+            elapsed = time.time() - start_time
+            logger.warning(f" {command} replication timeout after {elapsed:.2f}s")
+            return False
+
+        except Exception as e:
+            logger.error(f"Error replicating {command}: {e}")
+            return False
+    
+    def _replicate_in_background(self, command: str, log_index: int):
+        """Background replication for eventual consistency"""
+        try:
+            logger.debug(f"Background replication started for {command} at index {log_index}")
+            
+            # Send heartbeats to trigger replication
+            for wave in range(5):
+                with self.lock:
+                    if self.state == NodeState.LEADER:
+                        self._send_heartbeats()
+                time.sleep(0.1)
+            
+            # Check if replicated after 1 second
+            time.sleep(1.0)
+            with self.lock:
+                replicated = 1
+                for peer_id in self.peers:
+                    if self.match_index.get(peer_id, -1) >= log_index:
+                        replicated += 1
+                
+                total = len(self.peers) + 1
+                logger.info(f"Background replication of {command}: {replicated}/{total} nodes")
+                
+        except Exception as e:
+            logger.error(f"Background replication error: {e}")
+
+    def _apply_committed_entries(self):
+        """Apply committed log entries"""
+        applied_count = 0
+        while self.last_applied < self.commit_index:
+            self.last_applied += 1
+            entry = self.log[self.last_applied]
+            
+            try:
+                data = json.loads(entry.data.decode('utf-8'))
+                command = entry.command
+                
+                logger.debug(f"Applying log[{self.last_applied}]: {command}")
+                
+                if command == "CREATE_USER":
+                    self._apply_create_user(data)
+                elif command == "LOGIN_USER":
+                    self._apply_login(data)
+                elif command == "CREATE_CHANNEL":
+                    self._apply_create_channel(data)
+                elif command == "JOIN_CHANNEL":
+                    self._apply_join_channel(data)
+                    # Remove the verification - it's too noisy and not always accurate
+                elif command == "LEAVE_CHANNEL":
+                    self._apply_leave_channel(data)
+                elif command == "SEND_MESSAGE":
+                    self._apply_send_message(data)
+                elif command == "SEND_DM":
+                    self._apply_send_dm(data)
+                elif command == "UPLOAD_FILE":
+                    self._apply_upload_file(data)
+                else:
+                    logger.warning(f"Unknown command: {command}")
+                
+                applied_count += 1
+                
+            except Exception as e:
+                logger.error(f" Error applying log[{self.last_applied}] ({command}): {e}")
+                import traceback
+                traceback.print_exc()
+        
+        if applied_count > 0:
+            logger.debug(f" Applied {applied_count} log entries")
+        
+        # 💾 SAVE STATE: Persist last_applied
+        if self.last_applied >= 0:
+            self._save_raft_state()
+
+    def _apply_create_user(self, data: dict):
+        """Apply user creation from log"""
+        username = data['username']
+        if username not in self.users:
+            self.users[username] = {
+                "id": data['user_id'],
+                "username": username,
+                "password": data['password'].encode('latin1'),
+                "email": data['email'],
+                "display_name": data['display_name'],
+                "is_admin": data['is_admin'],
+                "status": "offline"
+            }
+            self.users_by_id[data['user_id']] = username
+            self._save_users()
+            logger.info(f" Replicated user: {username}")
+    
+    def _apply_login(self, data: dict):
+        """Apply login from log"""
+        username = data['username']
+        if username in self.users:
+            self.users[username]['status'] = 'online'
+            self.online_users.add(username)
+    
+    def _apply_create_channel(self, data: dict):
+        """Apply channel creation from log"""
+        channel_id = data['channel_id']
+        channel_name = data['name']
+        
+        # Check if this exact channel_id already exists (idempotency for log replay)
+        if channel_id in self.channels:
+            logger.debug(f"Channel #{channel_name} (ID: {channel_id}) already exists, skipping")
+            return
+        
+        # Apply the channel creation from log
+        member_ids = data['members']
+        admin_ids = data['admins']
+        
+        logger.info(f"   Creating channel #{channel_name} (ID: {channel_id})")
+        logger.info(f"   Initial members: {member_ids}")
+        logger.info(f"   Initial admins: {admin_ids}")
+        
+        self.channels[channel_id] = {
+            "id": channel_id,
+            "name": channel_name,
+            "description": data['description'],
+            "is_private": data['is_private'],
+            "members": set(member_ids),
+            "admins": set(admin_ids),
+            "created_at": datetime.datetime.now(datetime.timezone.utc)
+        }
+        self.channel_messages[channel_id] = []
+        self._save_channels()  # ← Save immediately after creation!
+        logger.info(f"   Replicated channel: #{channel_name} with {len(member_ids)} initial members")
+    
+    def _apply_join_channel(self, data: dict):
+        """Apply channel join from log"""
+        channel_id = data['channel_id']
+        user_id = data['user_id']
+        
+        logger.debug(f"_apply_join_channel called: channel={channel_id}, user={user_id}")
+        
+        if channel_id not in self.channels:
+            # Channel doesn't exist yet - this can happen if:
+            # 1. Log entries are being replayed out of order
+            # 2. Different nodes have different UUIDs for default channels
+            # 3. Channel creation hasn't been applied yet
+            
+            # Try to find channel by checking if ANY channel exists (for default channels like "general")
+            # This handles the case where each node generates different UUIDs for default channels
+            found_channel = False
+            for cid, channel in self.channels.items():
+                # If this is a default channel (general, random, tech), use the local UUID instead
+                if channel['name'] in ['general', 'random', 'tech']:
+                    # Use the local channel ID instead of the one from the log
+                    self.channels[cid]['members'].add(user_id)
+                    self._save_channels()
+                    logger.debug(f" Applied JOIN_CHANNEL using local channel ID: user {user_id} → {channel['name']}")
+                    found_channel = True
+                    return
+            
+            # If we still haven't found it, log a debug message (not a warning)
+            logger.debug(f"Channel {channel_id} not found yet when applying JOIN_CHANNEL - will retry when channel is created")
+            return  # Skip silently - this is expected behavior
+        
+        # Channel exists - add the user
+        before_count = len(self.channels[channel_id]['members'])
+        self.channels[channel_id]['members'].add(user_id)
+        after_count = len(self.channels[channel_id]['members'])
+        
+        self._save_channels()
+        
+        logger.info(f" Applied JOIN_CHANNEL: user {user_id} → channel {channel_id}, members: {before_count}→{after_count}")
+
+    def _apply_leave_channel(self, data: dict):
+        """Apply channel leave/removal from log"""
+        channel_id = data['channel_id']
+        user_id = data['user_id']
+        if channel_id in self.channels:
+            self.channels[channel_id]['members'].discard(user_id)
+            self._save_channels()  # ← Save after removal
+            logger.debug(f"Applied LEAVE_CHANNEL: user {user_id} removed from channel {channel_id}")
+
+    def _apply_send_message(self, data: dict):
+        """Apply message from log"""
+        channel_id = data['channel_id']
+        message_id = data.get('id')
+        
+        # CRITICAL FIX: Check for duplicate messages before adding
+        if channel_id in self.channel_messages:
+            # Check if message already exists
+            for existing_msg in self.channel_messages[channel_id]:
+                if existing_msg.get('id') == message_id:
+                    logger.info(f"  Message {message_id} already exists (content: '{data.get('content', 'N/A')}'), skipping duplicate")
+                    return  # Skip duplicate
+        
+        # Initialize channel messages list if needed
+        if channel_id not in self.channel_messages:
+            self.channel_messages[channel_id] = []
+        
+        self.channel_messages[channel_id].append(data)
+        
+        # CRITICAL: Persist messages immediately after adding
+        self._save_messages()
+        
+        logger.info(f" Applied SEND_MESSAGE: {data['sender_name']} → channel {channel_id}, content: '{data.get('content', 'N/A')}', total messages: {len(self.channel_messages[channel_id])}")
+    
+    def _apply_send_dm(self, data: dict):
+        """Apply DM from log"""
+        # Check for duplicates before adding
+        dm_id = data.get('id')
+        if dm_id:
+            # Check if this DM already exists
+            for existing_dm in self.direct_messages:
+                if existing_dm.get('id') == dm_id:
+                    logger.debug(f"DM {dm_id} already exists, skipping duplicate")
+                    return  # Skip duplicate
+        
+        self.direct_messages.append(data)
+        
+        # CRITICAL FIX: Persist DMs after adding
+        self._save_direct_messages()
+        
+        logger.debug(f"Applied SEND_DM: {data['sender_name']} → {data['recipient_name']}, total DMs: {len(self.direct_messages)}")
+    
+    def _apply_upload_file(self, data: dict):
+        """Apply file upload from log"""
+        file_id = data['file_id']
+        if file_id not in self.files:
+            # Convert hex back to bytes for file data
+            file_data_copy = data.copy()
+            if 'data' in file_data_copy and isinstance(file_data_copy['data'], str):
+                file_data_copy['data'] = bytes.fromhex(file_data_copy['data'])
+            self.files[file_id] = file_data_copy
+            logger.info(f" Replicated file: {data['name']}")
+    
+    # ===== Update RPC methods to use replication =====
+    
+    def Signup(self, request, context):
+        with self.lock:
+            username = request.username.strip()
+            if username in self.users:
+                return raft_node_pb2.SignupResponse(success=False, message="Username already exists")
+            
+            if self.state != NodeState.LEADER:
+                return raft_node_pb2.SignupResponse(success=False, message="Not the leader")
+            
+            user_id = str(uuid.uuid4())
+            hashed_pw = bcrypt.hashpw(request.password.encode(), bcrypt.gensalt())
+            
+            # Replicate through Raft
+            user_data = {
+                "user_id": user_id,
+                "username": username,
+                "password": hashed_pw.decode('latin1'),
+                "email": request.email,
+                "display_name": request.display_name or username,
+                "is_admin": False
+            }
+            
+            if not self._replicate_state_change("CREATE_USER", user_data):
+                return raft_node_pb2.SignupResponse(success=False, message="Replication failed")
+            
+            user_info = raft_node_pb2.UserInfo(
+                user_id=user_id, username=username, display_name=request.display_name or username,
+                email=request.email, is_admin=False, status="offline"
+            )
+            
+            logger.info(f"User {username} created and replicated")
+            return raft_node_pb2.SignupResponse(success=True, message="Account created!", user_info=user_info)
+    
+    def Login(self, request, context):
+        with self.lock:
+            username = request.username.strip()
+            password = request.password
+            
+            if username not in self.users:
+                return raft_node_pb2.LoginResponse(success=False, message="Invalid credentials")
+            
+            # Check password
+            user = self.users[username]
+            stored_password = user['password']
+            
+            # Handle both bytes and string stored passwords
+            if isinstance(stored_password, str):
+                stored_password = stored_password.encode('latin1')
+            
+            if not bcrypt.checkpw(password.encode('utf-8'), stored_password):
+                return raft_node_pb2.LoginResponse(success=False, message="Invalid credentials")
+            
+            # Generate JWT token
+            token = self._generate_token(user["id"], username)
+            
+            # Create session (local cache for performance)
+            self.sessions[token] = {
+                "user_id": user["id"],
+                "username": username,
+                "login_time": datetime.datetime.now(datetime.timezone.utc)
+            }
+            
+            # CRITICAL FIX: Store active token in user record for cross-node validity
+            user["active_token"] = token
+            user["token_issued_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
+            
+            # CRITICAL FIX: Update user status LOCALLY (not through Raft)
+            # Status changes are ephemeral and should not be in Raft log
+            user["status"] = "online"
+            self.online_users.add(username)
+            self._save_users()
+            
+            # CRITICAL FIX: Auto-join general channel MUST go through Raft if we're the leader
+            general_channel_id = None
+            for cid, channel in self.channels.items():
+                if channel["name"] == "general":
+                    general_channel_id = cid
+                    break
+            
+            # Check if user is NOT already a member before auto-joining
+            if general_channel_id and user["id"] not in self.channels[general_channel_id]["members"]:
+                if self.state == NodeState.LEADER:
+                    # REPLICATE through Raft so all nodes get the update
+                    join_data = {
+                        "channel_id": general_channel_id,
+                        "user_id": user["id"]
+                    }
+                    
+                    # Use fire-and-forget instant commit for auto-join
+                    self._replicate_state_change("JOIN_CHANNEL", join_data)
+                    logger.info(f"Auto-joined {username} to #general (replicated)")
+                else:
+                    # If not leader, the login request will be redirected by client
+                    # Don't auto-join locally - let the leader handle it
+                    logger.warning(f"Not leader - cannot auto-join {username} to #general")
+            elif general_channel_id:
+                logger.debug(f"User {username} already member of #general, skipping auto-join")
+            
+            user_info = raft_node_pb2.UserInfo(
+                user_id=user["id"],
+                username=username,
+                display_name=user.get("display_name", username),
+                email=user.get("email", ""),
+                is_admin=user.get("is_admin", False),
+                status="online"
+            )
+            
+            logger.info(f"User {username} logged in")
+            
+            return raft_node_pb2.LoginResponse(
+                success=True,
+                token=token,
+                message="Login successful",
+                user_info=user_info
+            )
+    
+    def CreateChannel(self, request, context):
+        with self.lock:
+            payload = self._verify_token(request.token)
+            if not payload:
+                return raft_node_pb2.StatusResponse(success=False, message="Invalid token")
+            
+            if self.state != NodeState.LEADER:
+                return raft_node_pb2.StatusResponse(success=False, message="Not the leader")
+            
+            channel_name = request.channel_name.strip()
+            
+            # Check if channel already exists (case-insensitive)
+            for channel in self.channels.values():
+                if channel["name"].lower() == channel_name.lower():
+                    logger.warning(f"Channel creation blocked: #{channel_name} already exists (existing: {channel['name']})")
+                    return raft_node_pb2.StatusResponse(success=False, message=f"Channel #{channel_name} already exists")
+            
+            channel_id = str(uuid.uuid4())
+            
+            # Replicate through Raft
+            channel_data = {
+                "channel_id": channel_id,
+                "name": channel_name,
+                "description": request.description or f"Channel {channel_name}",
+                "is_private": request.is_private,
+                "members": [payload["user_id"]],
+                "admins": [payload["user_id"]]
+            }
+            
+            if not self._replicate_state_change("CREATE_CHANNEL", channel_data):
+                return raft_node_pb2.StatusResponse(success=False, message="Replication failed")
+            
+            logger.info(f" Channel #{channel_name} created by {payload['username']} (auto-joined as admin)")
+            return raft_node_pb2.StatusResponse(
+                success=True, 
+                message=f"Channel #{channel_name} created! You are now in the channel.",
+                channel_id=channel_id  # Return channel_id so client can set it
+            )
+    
+    def GetChannels(self, request, context):
+        with self.lock:
+            payload = self._verify_token(request.token)
+            if not payload:
+                return raft_node_pb2.ChannelListResponse(success=False, channels=[])
+            
+            channels_list = []
+            for channel in self.channels.values():
+                channels_list.append(raft_node_pb2.Channel(
+                    channel_id=channel["id"],
+                    name=channel["name"],
+                    description=channel["description"],
+                    is_private=channel["is_private"],
+                    member_count=len(channel["members"])
+                ))
+            
+            return raft_node_pb2.ChannelListResponse(success=True, channels=channels_list)
+    
+    def GetMessages(self, request, context):
+        with self.lock:
+            payload = self._verify_token(request.token)
+            if not payload:
+                return raft_node_pb2.MessageListResponse(success=False, messages=[])
+            
+            channel_id = request.channel_id
+            limit = request.limit if request.limit > 0 else 50
+            
+            messages = self.channel_messages.get(channel_id, [])
+            messages_slice = messages[-limit:]  # Get last N messages
+            
+            proto_messages = []
+            for msg in messages_slice:
+                proto_messages.append(raft_node_pb2.Message(
+                    message_id=msg["id"],
+                    sender_id=msg["sender_id"],
+                    sender_name=msg["sender_name"],
+                    channel_id=msg["channel_id"],
+                    content=msg["content"],
+                    timestamp=msg["timestamp"]
+                ))
+            
+            return raft_node_pb2.MessageListResponse(success=True, messages=proto_messages)
+    
+    def GetDirectMessages(self, request, context):
+        with self.lock:
+            payload = self._verify_token(request.token)
+            if not payload:
+                return raft_node_pb2.DirectMessageListResponse(success=False, messages=[])
+            
+            if request.other_username not in self.users:
+                return raft_node_pb2.DirectMessageListResponse(success=False, messages=[])
+            
+            current_username = payload["username"]
+            other_username = request.other_username
+            
+            # CRITICAL FIX: Match by USERNAME, not user_id (user_id changes on restart)
+            # Get conversation between these two users
+            conversation = []
+            for dm in self.direct_messages:
+                if (dm["sender_name"] == current_username and dm["recipient_name"] == other_username) or \
+                   (dm["sender_name"] == other_username and dm["recipient_name"] == current_username):
+                    conversation.append(dm)
+            
+            logger.debug(f"GetDirectMessages: {current_username} ↔ {other_username}, found {len(conversation)} messages from {len(self.direct_messages)} total DMs")
+            
+            conversation.sort(key=lambda x: x["timestamp"])
+            
+            limit = request.limit if request.limit > 0 else 50
+            messages_slice = conversation[-limit:]
+            
+            proto_messages = []
+            for dm in messages_slice:
+                proto_messages.append(raft_node_pb2.DirectMessage(
+                    message_id=dm["id"],
+                    sender_id=dm["sender_id"],
+                    sender_name=dm["sender_name"],
+                    recipient_id=dm["recipient_id"],
+                    recipient_name=dm["recipient_name"],
+                    content=dm["content"],
+                    timestamp=dm["timestamp"],
+                    is_read=dm["is_read"]
+                ))
+            
+            return raft_node_pb2.DirectMessageListResponse(success=True, messages=proto_messages)
+    
+    def GetOnlineUsers(self, request, context):
+        with self.lock:
+            payload = self._verify_token(request.token)
+            if not payload:
+                return raft_node_pb2.UserListResponse(success=False, users=[])
+            
+            users_list = []
+            for username, user in self.users.items():
+                users_list.append(raft_node_pb2.UserInfo(
+                    user_id=user["id"],
+                    username=username,
+                    display_name=user.get("display_name", username),
+                    email=user.get("email", ""),
+                    is_admin=user.get("is_admin", False),
+                    status=user.get("status", "offline")
+                ))
+            
+            return raft_node_pb2.UserListResponse(success=True, users=users_list)
+    
+    def ListConversations(self, request, context):
+        with self.lock:
+            payload = self._verify_token(request.token)
+            if not payload:
+                return raft_node_pb2.ConversationsResponse(success=False, conversations=[])
+            
+            user_id = payload["user_id"]
+            
+            # Find all unique conversation partners
+            partners = set()
+            for dm in self.direct_messages:
+                if dm["sender_id"] == user_id:
+                    partners.add(dm["recipient_id"])
+                elif dm["recipient_id"] == user_id:
+                    partners.add(dm["sender_id"])
+            
+            conversations = []
+            for partner_id in partners:
+                partner_username = self.users_by_id.get(partner_id)
+                if partner_username and partner_username in self.users:
+                    partner = self.users[partner_username]
+                    
+                    # Count unread messages from this partner
+                    unread = sum(1 for dm in self.direct_messages 
+                                if dm["recipient_id"] == user_id and 
+                                   dm["sender_id"] == partner_id and 
+                                   not dm.get("is_read", False))
+                    
+                    conversations.append(raft_node_pb2.Conversation(
+                        username=partner_username,
+                        display_name=partner.get("display_name", partner_username),
+                        unread_count=unread
+                    ))
+            
+            return raft_node_pb2.ConversationsResponse(success=True, conversations=conversations)
+    
+    def GetLeaderInfo(self, request, context):
+        """Get leader information - MUST be defined"""
+        with self.lock:
+            leader_address = ""
+            if self.state == NodeState.LEADER:
+                leader_address = f"localhost:{self.port}"
+            elif self.current_leader_id and self.current_leader_id in self.peers:
+                leader_address = self.peers[self.current_leader_id]
+            
+            return raft_node_pb2.GetLeaderResponse(
+                is_leader=(self.state == NodeState.LEADER),
+                leader_id=self.current_leader_id or -1,
+                leader_address=leader_address,
+                term=self.current_term,
+                state=self.state.value
+            )
+    
+    def _generate_token(self, user_id: str, username: str) -> str:
+        """Generate JWT token"""
+        payload = {
+            "user_id": user_id,
+            "username": username,
+            "exp": datetime.datetime.now(datetime.timezone.utc) + timedelta(hours=24)
+        }
+        return jwt.encode(payload, self.jwt_secret, algorithm="HS256")
+    
+    def _verify_token(self, token: str) -> Optional[dict]:
+        """Verify JWT token - works across all nodes"""
+        try:
+            payload = jwt.decode(token, self.jwt_secret, algorithms=["HS256"])
+            username = payload.get("username")
+            
+            if not username or username not in self.users:
+                return None
+            
+            # CROSS-NODE FIX: Check if token matches user's active token
+            user = self.users[username]
+            if user.get("active_token") == token:
+                # Rebuild session cache if missing (happens after node restart/reconnect)
+                if token not in self.sessions:
+                    self.sessions[token] = {
+                        "user_id": user["id"],
+                        "username": username,
+                        "login_time": datetime.datetime.now(datetime.timezone.utc)
+                    }
+                return payload
+            
+            # Fallback: Check local session cache (for backward compatibility)
+            if token in self.sessions:
+                return payload
+            
+            return None
+        except:
+            return None
+    
+    def Logout(self, request, context):
+        """Handle logout"""
+        with self.lock:
+            payload = self._verify_token(request.token)
+            if not payload:
+                return raft_node_pb2.StatusResponse(success=False, message="Invalid token")
+            
+            username = payload["username"]
+            
+            if request.token in self.sessions:
+                del self.sessions[request.token]
+            
+            # CROSS-NODE FIX: Clear active_token from user record
+            if username in self.users:
+                self.users[username]["active_token"] = None
+                self.users[username]["status"] = "offline"
+                self.online_users.discard(username)
+                self._save_users()
+            
+            logger.info(f"User {username} logged out")
+            
+            return raft_node_pb2.StatusResponse(success=True, message="Logged out")
+    
+    def JoinChannel(self, request, context):
+        """Join a channel - RESTRICTED: Only 'general' channel allows self-join"""
+        with self.lock:
+            payload = self._verify_token(request.token)
+            if not payload:
+                return raft_node_pb2.StatusResponse(success=False, message="Invalid token")
+            
+            channel_id = request.channel_id
+            if channel_id not in self.channels:
+                return raft_node_pb2.StatusResponse(success=False, message="Channel not found")
+            
+            channel = self.channels[channel_id]
+            
+            # SPECIAL EXCEPTION: Default public channels (general, random, tech) allow anyone to join
+            if channel['name'].lower() in ['general', 'random', 'tech']:
+                # Check if already a member
+                if payload["user_id"] in channel["members"]:
+                    return raft_node_pb2.StatusResponse(success=True, message="Already in #general")
+                
+                # Add user to general channel
+                join_data = {
+                    "channel_id": channel_id,
+                    "user_id": payload["user_id"]
+                }
+                
+                if not self._replicate_state_change("JOIN_CHANNEL", join_data):
+                    return raft_node_pb2.StatusResponse(success=False, message="Replication failed")
+                
+                logger.info(f"✅ User {payload['username']} joined #{channel['name']} (public channel)")
+                return raft_node_pb2.StatusResponse(success=True, message=f"Joined #{channel['name']}")
+            
+            # For all other channels: Admin-only access
+            return raft_node_pb2.StatusResponse(
+                success=False, 
+                message=f" Cannot join #{channel['name']} directly. Ask a channel admin to add you using: add_user {payload['username']}"
+            )
+    
+    def SendMessage(self, request, context):
+        """Send message to channel"""
+        with self.lock:
+            payload = self._verify_token(request.token)
+            if not payload:
+                return raft_node_pb2.StatusResponse(success=False, message="Invalid token")
+            
+            if self.state != NodeState.LEADER:
+                return raft_node_pb2.StatusResponse(success=False, message="Not the leader")
+            
+            channel_id = request.channel_id
+            
+            if not channel_id or channel_id not in self.channels:
+                logger.warning(f"Channel not found: {channel_id}")
+                return raft_node_pb2.StatusResponse(success=False, message=f"Channel not found: {channel_id}")
+            
+            user_id = payload["user_id"]
+            
+            # Check if user is a member of the channel
+            if user_id not in self.channels[channel_id]["members"]:
+                logger.warning(f"User {payload['username']} not member of channel {self.channels[channel_id]['name']}")
+                # Auto-add them to the channel
+                self.channels[channel_id]["members"].add(user_id)
+                self._save_channels()
+                logger.info(f"Auto-added {payload['username']} to channel {self.channels[channel_id]['name']}")
+            
+            message = {
+                "id": str(uuid.uuid4()),
+                "sender_id": user_id,
+                "sender_name": payload["username"],
+                "channel_id": channel_id,
+                "content": request.content,
+                "timestamp": int(time.time() * 1000)
+            }
+            
+            if not self._replicate_state_change("SEND_MESSAGE", message):
+                return raft_node_pb2.StatusResponse(success=False, message="Replication failed")
+            
+            logger.info(f"Message from {payload['username']} sent to channel {self.channels[channel_id]['name']}")
+            return raft_node_pb2.StatusResponse(success=True, message="Message sent")
+    
+    def SendDirectMessage(self, request, context):
+        """Send direct message to another user"""
+        with self.lock:
+            payload = self._verify_token(request.token)
+            if not payload:
+                return raft_node_pb2.StatusResponse(success=False, message="Invalid token")
+            
+            if self.state != NodeState.LEADER:
+                return raft_node_pb2.StatusResponse(success=False, message="Not the leader")
+            
+            if request.recipient_username not in self.users:
+                return raft_node_pb2.StatusResponse(success=False, message="User not found")
+            
+            recipient = self.users[request.recipient_username]
+            
+            dm = {
+                "id": str(uuid.uuid4()),
+                "sender_id": payload["user_id"],
+                "sender_name": payload["username"],
+                "recipient_id": recipient["id"],
+                "recipient_name": request.recipient_username,
+                "content": request.content,
+                "timestamp": int(time.time() * 1000),
+                "is_read": False
+            }
+            
+            # CRITICAL FIX: For DMs, we need to wait for replication (not instant commit)
+            # Otherwise DMs will be lost if leader crashes before replication
+            logger.info(f"📤 Sending DM from {payload['username']} to {request.recipient_username}...")
+            
+            # Store in log and wait for majority replication
+            if not self._replicate_state_change("SEND_DM", dm):
+                logger.error(f" DM replication failed!")
+                return raft_node_pb2.StatusResponse(success=False, message="Replication failed")
+            
+            logger.info(f" DM replicated and committed to majority")
+            return raft_node_pb2.StatusResponse(success=True, message="DM sent")
+    
+    def UploadFile(self, request, context):
+        """Upload file"""
+        with self.lock:
+            payload = self._verify_token(request.token)
+            if not payload:
+                return raft_node_pb2.FileUploadResponse(success=False, message="Invalid token")
+            
+            if self.state != NodeState.LEADER:
+                return raft_node_pb2.FileUploadResponse(success=False, message="Not the leader")
+            
+            file_id = str(uuid.uuid4())
+            mime_type = request.mime_type or mimetypes.guess_type(request.file_name)[0] or "application/octet-stream"
+            
+            file_data = {
+                "file_id": file_id,
+                "name": request.file_name,
+                "data": request.file_data.hex(),
+                "size": len(request.file_data),
+                "mime_type": mime_type,
+                "uploader_id": payload["user_id"],
+                "uploader_name": payload["username"],
+                "channel_id": request.channel_id if request.channel_id else None,
+                "recipient": request.recipient_username if request.recipient_username else None,
+                "description": request.description
+            }
+            
+            if not self._replicate_state_change("UPLOAD_FILE", file_data):
+                return raft_node_pb2.FileUploadResponse(success=False, message="Replication failed")
+            
+            return raft_node_pb2.FileUploadResponse(
+                success=True,
+                message="File uploaded successfully",
+                file_id=file_id,
+                file_url=f"file://{file_id}"
+            )
+    
+    def DownloadFile(self, request, context):
+        """Download file"""
+        with self.lock:
+            payload = self._verify_token(request.token)
+            if not payload:
+                return raft_node_pb2.FileDownloadResponse(success=False, file_name="", file_data=b"")
+            
+            
+            file_id = request.file_id
+            
+            if file_id not in self.files:
+                return raft_node_pb2.FileDownloadResponse(
+                    success=False,
+                    file_name="Not found",
+                    file_data=b"",
+                    mime_type="text/plain"
+                )
+            
+            file_data = self.files[file_id]
+            file_bytes = file_data["data"]
+            if isinstance(file_bytes, str):
+                file_bytes = bytes.fromhex(file_bytes)
+            
+            return raft_node_pb2.FileDownloadResponse(
+                success=True,
+                file_name=file_data["name"],
+                file_data=file_bytes,
+                mime_type=file_data["mime_type"]
+            )
+    
+    def ListFiles(self, request, context):
+        """List files in channel"""
+        with self.lock:
+            payload = self._verify_token(request.token)
+            if not payload:
+                return raft_node_pb2.FileListResponse(success=False, files=[])
+            
+            channel_id = request.channel_id
+            
+            file_list = []
+            for file_id, file_data in self.files.items():
+                if file_data.get("channel_id") == channel_id:
+                    metadata = raft_node_pb2.FileMetadata(
+                        file_id=file_id,
+                        file_name=file_data["name"],
+                        uploader_name=file_data["uploader_name"],
+                        file_size=file_data["size"],
+                        mime_type=file_data["mime_type"],
+                        channel_id=channel_id
+                    )
+                    file_list.append(metadata)
+            
+            return raft_node_pb2.FileListResponse(success=True, files=file_list)
+    
+    def GetSmartReply(self, request, context):
+        """Get smart reply suggestions"""
+        with self.lock:
+            payload = self._verify_token(request.token)
+            if not payload:
+                return raft_node_pb2.SmartReplyResponse(success=False, suggestions=[])
+            
+            channel_id = request.channel_id
+            count = request.recent_message_count if request.recent_message_count > 0 else 5
+            
+            # Get recent messages from channel
+            messages = self.channel_messages.get(channel_id, [])
+            recent = messages[-count:] if len(messages) > count else messages
+            
+            # Try to ensure LLM connection
+            if not self._ensure_llm_connection():
+                # Fallback if LLM not available
+                return raft_node_pb2.SmartReplyResponse(
+                    success=True,
+                    suggestions=["I agree", "That's interesting", "Tell me more"]
+                )
+            
+            try:
+                # Convert to LLM format
+                llm_messages = []
+                for msg in recent:
+                    llm_msg = llm_service_pb2.Message(
+                        sender=msg["sender_name"],
+                        content=msg["content"]
+                    )
+                    llm_messages.append(llm_msg)
+                
+                # Call LLM service with increased timeout
+                llm_request = llm_service_pb2.SmartReplyRequest(
+                    request_id=str(uuid.uuid4()),
+                    recent_messages=llm_messages
+                )
+                
+                llm_response = self.llm_stub.GetSmartReply(llm_request, timeout=20.0)  # Increased from 5.0 to 10.0
+                
+                return raft_node_pb2.SmartReplyResponse(
+                    success=True,
+                    suggestions=llm_response.suggestions
+                )
+                
+            except Exception as e:
+                logger.error(f"LLM smart reply error: {e}")
+                return raft_node_pb2.SmartReplyResponse(
+                    success=True,
+                    suggestions=["Sounds good", "I understand", "Interesting"]
+                )
+    
+    def SummarizeConversation(self, request, context):
+        """Summarize conversation"""
+        with self.lock:
+            payload = self._verify_token(request.token)
+            if not payload:
+                return raft_node_pb2.SummarizeResponse(success=False, summary="", key_points=[])
+            
+            channel_id = request.channel_id
+            count = request.message_count if request.message_count > 0 else 20
+            
+            # Get messages from channel
+            messages = self.channel_messages.get(channel_id, [])
+            recent = messages[-count:] if len(messages) > count else messages
+            
+            if not recent:
+                return raft_node_pb2.SummarizeResponse(
+                    success=True,
+                    summary="No messages to summarize",
+                    key_points=[]
+                )
+            
+            # Try to ensure LLM connection
+            if not self._ensure_llm_connection():
+                # Fallback if LLM not available
+                participants = list(set([m["sender_name"] for m in recent]))
+                return raft_node_pb2.SummarizeResponse(
+                    success=True,
+                    summary=f"Conversation with {len(recent)} messages between {', '.join(participants[:3])}",
+                    key_points=[
+                        f"{len(recent)} messages exchanged",
+                        f"{len(participants)} participants",
+                        "💡 Tip: Start LLM server for AI-powered summaries: python llm_server/llm_server.py"
+                    ]
+                )
+            
+            try:
+                # Convert to LLM format
+                llm_messages = []
+                for msg in recent:
+                    llm_msg = llm_service_pb2.Message(
+                        sender=msg["sender_name"],
+                        content=msg["content"]
+                    )
+                    llm_messages.append(llm_msg)
+                
+                # Call LLM service
+                llm_request = llm_service_pb2.SummarizeRequest(
+                    request_id=str(uuid.uuid4()),
+                    messages=llm_messages,
+                    max_length=200,
+                )
+                
+                llm_response = self.llm_stub.SummarizeConversation(llm_request, timeout=10.0)
+                
+                return raft_node_pb2.SummarizeResponse(
+                    success=True,
+                    summary=llm_response.summary,
+                    key_points=list(llm_response.key_points)
+                )
+                
+            except Exception as e:
+                logger.error(f"LLM summarize error: {e}")
+                participants = list(set([m["sender_name"] for m in recent]))
+                return raft_node_pb2.SummarizeResponse(
+                    success=True,
+                    summary=f"Discussion between {', '.join(participants)}",
+                    key_points=[f"{len(recent)} messages", "Active conversation"]
+                )
+
+    def GetLLMAnswer(self, request, context):
+        """Get LLM answer"""
+        with self.lock:
+            payload = self._verify_token(request.token)
+            if not payload:
+                return raft_node_pb2.LLMResponse(success=False, answer="Invalid token")
+            
+            query = request.query
+            context_list = list(request.context) if request.context else []
+            
+            # Try to ensure LLM connection
+            if not self._ensure_llm_connection():
+                return raft_node_pb2.LLMResponse(
+                    success=False,
+                    answer="LLM service is not available. Please start the LLM server: python llm_server/llm_server.py"
+                )
+            
+            try:
+                # Call LLM service
+                llm_request = llm_service_pb2.LLMRequest(
+                    request_id=str(uuid.uuid4()),
+                    query=query,
+                    context=context_list
+                )
+                
+                llm_response = self.llm_stub.GetLLMAnswer(llm_request, timeout=10.0)
+                
+                return raft_node_pb2.LLMResponse(
+                    success=True,
+                    answer=llm_response.answer
+                )
+                
+            except Exception as e:
+                logger.error(f"LLM answer error: {e}")
+                return raft_node_pb2.LLMResponse(
+                    success=False,
+                    answer=f"Error: {str(e)}"
+                )
+    
+    def GetContextSuggestions(self, request, context):
+        """Get context-aware suggestions for next response"""
+        with self.lock:
+            payload = self._verify_token(request.token)
+            if not payload:
+                return raft_node_pb2.ContextSuggestionsResponse(
+                    success=False, suggestions=[], topics=[]
+                )
+            
+            channel_id = request.channel_id
+            current_input = request.current_input
+            count = request.context_message_count if request.context_message_count > 0 else 5
+            
+            # Get recent messages from channel
+            messages = self.channel_messages.get(channel_id, [])
+            recent = messages[-count:] if len(messages) > count else messages
+            
+            logger.info(f"GetContextSuggestions: input='{current_input}', messages={len(recent)}")
+            
+            # Try to ensure LLM connection
+            if not self._ensure_llm_connection():
+                logger.warning("LLM stub not available, using fallback")
+                return raft_node_pb2.ContextSuggestionsResponse(
+                    success=True,
+                    suggestions=["continue the thought", "ask a question", "share more"],
+                    topics=["current topic", "related discussion"]
+                )
+            
+            try:
+                # Convert to LLM format
+                llm_messages = []
+                for msg in recent:
+                    llm_msg = llm_service_pb2.Message(
+                        sender=msg["sender_name"],
+                        content=msg["content"]
+                    )
+                    llm_messages.append(llm_msg)
+                
+                logger.info(f"Calling LLM with {len(llm_messages)} messages")
+                
+                # Call LLM service
+                llm_request = llm_service_pb2.ContextRequest(
+                    request_id=str(uuid.uuid4()),
+                    context=llm_messages,
+                    current_input=current_input
+                )
+                
+                llm_response = self.llm_stub.GetContextSuggestions(llm_request, timeout=20.0)
+                
+                logger.info(f"LLM returned {len(llm_response.suggestions)} suggestions")
+                
+                return raft_node_pb2.ContextSuggestionsResponse(
+                    success=True,
+                    suggestions=list(llm_response.suggestions),
+                    topics=list(llm_response.topics)
+                )
+                
+            except Exception as e:
+                logger.error(f"Context suggestions error: {e}")
+                import traceback
+                traceback.print_exc()
+                return raft_node_pb2.ContextSuggestionsResponse(
+                    success=True,
+                    suggestions=["continue the conversation", "ask for details", "share thoughts"],
+                    topics=["current discussion"]
+                )
+
+    def AddUserToChannel(self, request, context):
+        """Add a user to a channel (Channel Admin or Global Admin only)"""
+        with self.lock:
+            payload = self._verify_token(request.token)
+            if not payload:
+                return raft_node_pb2.StatusResponse(success=False, message="Invalid token")
+            
+            channel_id = request.channel_id
+            username_to_add = request.target_username.strip()
+            
+            if channel_id not in self.channels:
+                return raft_node_pb2.StatusResponse(success=False, message="Channel not found")
+            
+            if username_to_add not in self.users:
+                return raft_node_pb2.StatusResponse(success=False, message=f"User '{username_to_add}' not found")
+            
+            channel = self.channels[channel_id]
+            user_to_add = self.users[username_to_add]
+            current_user = self.users[payload["username"]]
+            
+            # Check if already a member
+            if user_to_add["id"] in channel["members"]:
+                return raft_node_pb2.StatusResponse(success=False, message=f"{username_to_add} is already a member of #{channel['name']}")
+            
+            # Authorization: Only channel admins can add users
+            is_channel_admin = payload["user_id"] in channel["admins"]
+            
+            if not is_channel_admin:
+                return raft_node_pb2.StatusResponse(
+                    success=False, 
+                    message=f" Only admins of #{channel['name']} can add users. You are not an admin."
+                )
+            
+            # Replicate the state change
+            add_user_data = {
+                "channel_id": channel_id,
+                "user_id": user_to_add["id"]
+            }
+            
+            if not self._replicate_state_change("JOIN_CHANNEL", add_user_data):
+                return raft_node_pb2.StatusResponse(success=False, message="Replication failed")
+            
+            logger.info(f" Admin {payload['username']} added {username_to_add} to channel #{channel['name']}")
+            return raft_node_pb2.StatusResponse(
+                success=True, 
+                message=f" Added {username_to_add} to #{channel['name']}"
+            )
+    
+    def RemoveUserFromChannel(self, request, context):
+        """Remove a user from a channel (Channel Admin or Global Admin only)"""
+        with self.lock:
+            payload = self._verify_token(request.token)
+            if not payload:
+                return raft_node_pb2.StatusResponse(success=False, message="Invalid token")
+            
+            channel_id = request.channel_id
+            username_to_remove = request.target_username.strip()
+            
+            if channel_id not in self.channels:
+                return raft_node_pb2.StatusResponse(success=False, message="Channel not found")
+            
+            if username_to_remove not in self.users:
+                return raft_node_pb2.StatusResponse(success=False, message=f"User '{username_to_remove}' not found")
+            
+            channel = self.channels[channel_id]
+            user_to_remove = self.users[username_to_remove]
+            current_user = self.users[payload["username"]]
+            
+            # Check if not a member
+            if user_to_remove["id"] not in channel["members"]:
+                return raft_node_pb2.StatusResponse(success=False, message=f"{username_to_remove} is not a member of #{channel['name']}")
+            
+            # Authorization: Only channel admins can remove users
+            is_channel_admin = payload["user_id"] in channel["admins"]
+            
+            if not is_channel_admin:
+                return raft_node_pb2.StatusResponse(
+                    success=False, 
+                    message=f" Only admins of #{channel['name']} can remove users. You are not an admin."
+                )
+            
+            # Prevent removing yourself if you're the last admin
+            if user_to_remove["id"] == payload["user_id"] and payload["user_id"] in channel["admins"]:
+                admin_count = len(channel["admins"])
+                if admin_count == 1:
+                    return raft_node_pb2.StatusResponse(
+                        success=False,
+                        message=" Cannot remove yourself as you are the only admin. Add another admin first."
+                    )
+            
+            # Replicate the state change
+            remove_user_data = {
+                "channel_id": channel_id,
+                "user_id": user_to_remove["id"]
+            }
+            
+            if not self._replicate_state_change("LEAVE_CHANNEL", remove_user_data):
+                return raft_node_pb2.StatusResponse(success=False, message="Replication failed")
+            
+            logger.info(f" Admin {payload['username']} removed {username_to_remove} from channel #{channel['name']}")
+            return raft_node_pb2.StatusResponse(
+                success=True, 
+                message=f" Removed {username_to_remove} from #{channel['name']}"
+            )
+    
+    def GetChannelMembers(self, request, context):
+        """Get all members of a channel"""
+        with self.lock:
+            payload = self._verify_token(request.token)
+            if not payload:
+                return raft_node_pb2.ChannelMembersResponse(success=False, members=[], total_count=0)
+            
+            channel_id = request.channel_id
+            
+            if channel_id not in self.channels:
+                return raft_node_pb2.ChannelMembersResponse(success=False, members=[], total_count=0)
+            
+            channel = self.channels[channel_id]
+            members_list = []
+            
+            # Convert member IDs to member info
+            for user_id in channel["members"]:
+                username = self.users_by_id.get(user_id)
+                if username and username in self.users:
+                    user = self.users[username]
+                    member = raft_node_pb2.ChannelMember(
+                        user_id=user_id,
+                        username=username,
+                        display_name=user.get("display_name", username),
+                        is_admin=(user_id in channel.get("admins", set())),
+                        status=user.get("status", "offline")
+                    )
+                    members_list.append(member)
+            
+            logger.debug(f"GetChannelMembers for {channel['name']}: {len(members_list)} members")
+            
+            return raft_node_pb2.ChannelMembersResponse(
+                success=True,
+                members=members_list,
+                total_count=len(members_list)
+            )
+
+# UPDATE configuration: SEND_MESSAGE uses fast-commit for performance
+# Trade-off: Messages may be lost if leader crashes before replication completes
+# But system remains responsive even with minority of nodes available
+ALLOW_LOCAL_COMMIT = True
+ALLOW_LOCAL_COMMIT_COMMANDS = {"JOIN_CHANNEL", "LEAVE_CHANNEL", "SEND_MESSAGE", "SEND_DM", "UPLOAD_FILE", "CREATE_CHANNEL", "CREATE_USER"}
+REPLICATION_RETRIES = 200
+REPLICATION_SLEEP = 0.01
+HEARTBEAT_INTERVAL = 0.05
+
+def serve(node_id: int, port: int):
+    """Start Raft node with ALL features"""
+    peers = {1: "localhost:50051", 2: "localhost:50052", 3: "localhost:50053"}
+    peers_without_self = {pid: addr for pid, addr in peers.items() if pid != node_id}
+    
+    server = grpc.server(
+        futures.ThreadPoolExecutor(max_workers=10),
+        options=[
+            ('grpc.max_send_message_length', 50 * 1024 * 1024),
+            ('grpc.max_receive_message_length', 50 * 1024 * 1024),
+            ('grpc.keepalive_time_ms', 10000),
+            ('grpc.keepalive_timeout_ms', 5000),
+        ]
+    )
+    
+    raft_node = RaftNode(node_id, port, peers_without_self)
+    raft_node_pb2_grpc.add_RaftNodeServicer_to_server(raft_node, server)
+    
+    server.add_insecure_port(f'[::]:{port}')
+    server.start()
+    
+    logger.info(f" Complete Raft Chat Node {node_id} on port {port}")
+    logger.info("=" * 60)
+    
+    try:
+        while True:
+            time.sleep(2)
+            with raft_node.lock:
+                if raft_node.state == NodeState.LEADER:
+                    logger.info(
+                        f"[LEADER] Node {node_id}: LEADER | Term {raft_node.current_term} | "
+                        f"Log: {len(raft_node.log)} entries | "
+                        f"{len(raft_node.users)} users | {len(raft_node.channels)} channels | {len(raft_node.files)} files"
+                    )
+                else:
+                    leader_str = f"Leader: Node {raft_node.current_leader_id}" if raft_node.current_leader_id else " No leader"
+                    logger.info(
+                        f"   Node {node_id}: {raft_node.state.value.upper()} | Term {raft_node.current_term} | "
+                        f"Log: {len(raft_node.log)} entries | "
+                        f"{len(raft_node.users)} users | {len(raft_node.channels)} channels | {len(raft_node.files)} files | {leader_str}"
+                    )
+    except KeyboardInterrupt:
+        raft_node.running = False
+        for ch in raft_node.peer_channels.values():
+            ch.close()
+        server.stop(0)
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser(description='Raft Node with Full Chat Features')
+    parser.add_argument('--node-id', type=int, required=True, help='Node ID (1, 2, or 3)')
+    parser.add_argument('--port', type=int, required=True, help='Port number')
+    
+    args = parser.parse_args()
+    
+    print(f"\n{'='*60}")
+    print(f"  Raft Chat Node {args.node_id}")
+    print(f"  Port: {args.port}")
+    print(f"  Features: Consensus + Full Chat Application")
+    print(f"{'='*60}\n")
+    
+    serve(args.node_id, args.port)

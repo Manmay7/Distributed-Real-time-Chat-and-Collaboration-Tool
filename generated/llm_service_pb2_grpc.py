@@ -27,6 +27,25 @@ if _version_not_supported:
         RuntimeWarning
     )
 
+GRPC_GENERATED_VERSION = '1.76.0'
+GRPC_VERSION = grpc.__version__
+_version_not_supported = False
+
+try:
+    from grpc._utilities import first_version_is_lower
+    _version_not_supported = first_version_is_lower(GRPC_VERSION, GRPC_GENERATED_VERSION)
+except ImportError:
+    _version_not_supported = True
+
+if _version_not_supported:
+    raise RuntimeError(
+        f'The grpc package installed is at version {GRPC_VERSION},'
+        + ' but the generated code in llm_service_pb2_grpc.py depends on'
+        + f' grpcio>={GRPC_GENERATED_VERSION}.'
+        + f' Please upgrade your grpc module to grpcio>={GRPC_GENERATED_VERSION}'
+        + f' or downgrade your generated code using grpcio-tools<={GRPC_VERSION}.'
+    )
+
 
 class LLMServiceStub(object):
     """Missing associated documentation comment in .proto file."""
@@ -37,6 +56,11 @@ class LLMServiceStub(object):
         Args:
             channel: A grpc.Channel.
         """
+        self.GetLLMAnswer = channel.unary_unary(
+                '/llm.LLMService/GetLLMAnswer',
+                request_serializer=llm__service__pb2.LLMRequest.SerializeToString,
+                response_deserializer=llm__service__pb2.LLMResponse.FromString,
+                )
         self.GetSmartReply = channel.unary_unary(
                 '/llm.LLMService/GetSmartReply',
                 request_serializer=llm__service__pb2.SmartReplyRequest.SerializeToString,
@@ -46,7 +70,12 @@ class LLMServiceStub(object):
                 '/llm.LLMService/SummarizeConversation',
                 request_serializer=llm__service__pb2.SummarizeRequest.SerializeToString,
                 response_deserializer=llm__service__pb2.SummarizeResponse.FromString,
-                _registered_method=True)
+                )
+        self.GetContextSuggestions = channel.unary_unary(
+                '/llm.LLMService/GetContextSuggestions',
+                request_serializer=llm__service__pb2.ContextRequest.SerializeToString,
+                response_deserializer=llm__service__pb2.SuggestionsResponse.FromString,
+                )
 
 
 class LLMServiceServicer(object):
@@ -87,6 +116,23 @@ def add_LLMServiceServicer_to_server(servicer, server):
  # This class is part of an EXPERIMENTAL API.
 class LLMService(object):
     """Missing associated documentation comment in .proto file."""
+
+    @staticmethod
+    def GetLLMAnswer(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(request, target, '/llm.LLMService/GetLLMAnswer',
+            llm__service__pb2.LLMRequest.SerializeToString,
+            llm__service__pb2.LLMResponse.FromString,
+            options, channel_credentials,
+            insecure, call_credentials, compression, wait_for_ready, timeout, metadata)
 
     @staticmethod
     def GetSmartReply(request,
@@ -132,12 +178,22 @@ class LLMService(object):
             '/llm.LLMService/SummarizeConversation',
             llm__service__pb2.SummarizeRequest.SerializeToString,
             llm__service__pb2.SummarizeResponse.FromString,
-            options,
-            channel_credentials,
-            insecure,
-            call_credentials,
-            compression,
-            wait_for_ready,
-            timeout,
-            metadata,
-            _registered_method=True)
+            options, channel_credentials,
+            insecure, call_credentials, compression, wait_for_ready, timeout, metadata)
+
+    @staticmethod
+    def GetContextSuggestions(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(request, target, '/llm.LLMService/GetContextSuggestions',
+            llm__service__pb2.ContextRequest.SerializeToString,
+            llm__service__pb2.SuggestionsResponse.FromString,
+            options, channel_credentials,
+            insecure, call_credentials, compression, wait_for_ready, timeout, metadata)
