@@ -246,6 +246,4 @@ python client/chat_client.py
     Test users: alice/alice123, bob/bob123, charlie/charlie123
 
 (chat) > 
-```
 
----
